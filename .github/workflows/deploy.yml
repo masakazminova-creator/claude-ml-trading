@@ -1,0 +1,56 @@
+name: 🚀 Auto Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Manual trigger from GitHub UI
+
+jobs:
+  test:
+    name: 🧪 Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --tb=short
+
+  build-and-deploy:
+    name: 🚀 Build & Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: |
+        docker build -t claude-ml-trading:${{ github.sha }} .
+        docker tag claude-ml-trading:${{ github.sha }} claude-ml-trading:latest
+
+    - name: Save Docker image
+      run: |
+        docker save claude-ml-trading:latest > claude-ml-image.tar
+
+    - name: Upload artifact for deployment
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-image
+        path: claude-ml-image.tar
+        retention-days: 1

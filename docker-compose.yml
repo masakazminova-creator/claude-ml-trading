@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  claude-ml-trading:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-ml-bot
+    restart: unless-stopped
+    volumes:
+      # Persist data across deployments
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+      # Mount .env file
+      - ./.env:/app/.env:ro
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Monitoring service
+  monitor:
+    image: python:3.11-slim
+    container_name: claude-ml-monitor
+    restart: unless-stopped
+    volumes:
+      - ./:/app:ro
+      - ./logs:/app/logs
+    working_dir: /app
+    command: >
+      bash -c "while true; do
+        echo '=== System Status ===';
+        date;
+        echo '';
+        echo 'Last 10 log entries:';
+        tail -n 10 logs/runtime.log 2>/dev/null || echo 'No logs yet';
+        echo '';
+        echo 'Container uptime:';
+        uptime;
+        sleep 300;
+      done"
+    depends_on:
+      - claude-ml-trading
+
+networks:
+  default:
+    name: claude-ml-network
+    driver: bridge
+
+volumes:
+  data:
+  models:
+  logs:
