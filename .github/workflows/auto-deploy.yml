@@ -82,8 +82,26 @@ jobs:
           echo "[Deploy] Verifying all containers are running..."
           docker-compose ps
 
-          echo "[Deploy] Checking telegram-bot logs..."
-          docker-compose logs --tail=30 telegram-bot
+          echo ""
+          echo "[Deploy] === TELEGRAM BOT STATUS ==="
+          echo "[Deploy] Checking if telegram-bot container is running..."
+          docker-compose ps telegram-bot
+
+          echo ""
+          echo "[Deploy] Checking telegram-bot logs (last 50 lines)..."
+          docker-compose logs --tail=50 telegram-bot
+
+          echo ""
+          echo "[Deploy] Checking database file on server..."
+          ls -lh /opt/claude-ml-trading/data/runtime.sqlite || echo "DB not found in expected location"
+
+          echo ""
+          echo "[Deploy] Checking runtime container logs..."
+          docker-compose logs --tail=20 claude-ml-trading
+
+          echo ""
+          echo "[Deploy] All Docker images:"
+          docker images | grep claude
 
           echo "[Deploy] ✅ Deployment complete - all services restarted with new code!"
         ENDSSH
