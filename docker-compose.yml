@@ -38,6 +38,26 @@ services:
       retries: 3
       start_period: 30s
 
+  # Telegram Bot for interactive commands (/start, /balance, /trades, /status)
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-ml-telegram-bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python scripts/run_telegram_bot.py
+    depends_on:
+      - claude-ml-trading
+
   # Optional: Monitoring service
   monitor:
     image: python:3.11-slim
