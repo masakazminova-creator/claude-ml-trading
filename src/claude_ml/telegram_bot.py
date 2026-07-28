@@ -16,8 +16,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
 logger = logging.getLogger(__name__)
 
@@ -39,29 +39,32 @@ class TradingBot:
         self.application.add_handler(CommandHandler("trades", self.trades))
         self.application.add_handler(CommandHandler("status", self.status))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+
+    @staticmethod
+    def get_main_keyboard() -> ReplyKeyboardMarkup:
+        """Create main reply keyboard with buttons."""
+        keyboard = [
+            [
+                KeyboardButton("💰 Баланс"),
+                KeyboardButton("📈 Статус"),
+            ],
+            [
+                KeyboardButton("📊 Сделки"),
+                KeyboardButton("🔄 Обновить"),
+            ],
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command with inline buttons."""
+        """Handle /start command with persistent keyboard."""
         welcome_msg = (
             "🤖 *Claude ML Trading Bot*\n\n"
             "Система автоматического трейдинга запущена!\n\n"
-            "Используйте кнопки ниже для управления:"
+            "Используйте кнопки снизу для управления:"
         )
 
-        # Create inline keyboard
-        keyboard = [
-            [
-                InlineKeyboardButton("💰 Баланс", callback_data="cmd_balance"),
-                InlineKeyboardButton("📈 Статус", callback_data="cmd_status"),
-            ],
-            [
-                InlineKeyboardButton("📊 Сделки", callback_data="cmd_trades"),
-                InlineKeyboardButton("🔄 Обновить", callback_data="refresh_balance"),
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await update.message.reply_text(welcome_msg, parse_mode="Markdown", reply_markup=reply_markup)
+        await update.message.reply_text(welcome_msg, parse_mode="Markdown", reply_markup=self.get_main_keyboard())
 
     async def balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /balance command."""
@@ -229,6 +232,19 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error in status command: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка получения статуса: {e}")
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle text messages from keyboard buttons."""
+        text = update.message.text
+
+        if text == "💰 Баланс":
+            await self.balance(update, context)
+        elif text == "📈 Статус":
+            await self.status(update, context)
+        elif text == "📊 Сделки":
+            await self.trades(update, context)
+        elif text == "🔄 Обновить":
+            await self.balance(update, context)
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle inline button clicks."""
