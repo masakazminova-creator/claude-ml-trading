@@ -15,7 +15,12 @@ from typing import List, Optional
 from dotenv import load_dotenv
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]  # One level up from src/claude_ml (points to claude_ml_system/)
+# Determine root directory: use PROJECT_ROOT env var if set (for Docker), otherwise auto-detect
+PROJECT_ROOT_ENV = os.getenv("PROJECT_ROOT", "")
+if PROJECT_ROOT_ENV:
+    ROOT_DIR = Path(PROJECT_ROOT_ENV)
+else:
+    ROOT_DIR = Path(__file__).resolve().parents[2]  # One level up from src/claude_ml (points to claude_ml_system/)
 load_dotenv(ROOT_DIR / ".env")
 
 
