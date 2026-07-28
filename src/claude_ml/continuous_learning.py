@@ -546,14 +546,14 @@ class ContinuousLearningEngine:
             max_hold_bars=3,
         )
 
-            # Retrain
-            retrain_result = self.retrain_all_models(df)
-            result["retraining_result"] = retrain_result
+        # Retrain
+        retrain_result = self.retrain_all_models(df)
+        result["retraining_result"] = retrain_result
 
-            if retrain_result.promoted:
-                print(f"\n[AUTO-LEARN] ✓ New models promoted!")
-            else:
-                print(f"\n[AUTO-LEARN] ⚠ Models not promoted (training failed)")
+        if retrain_result.promoted:
+            print(f"\n[AUTO-LEARN] ✓ New models promoted!")
+        else:
+            print(f"\n[AUTO-LEARN] ⚠ Models not promoted (training failed)")
 
         print(f"\n[AUTO-LEARN] Cycle complete\n")
         return result
