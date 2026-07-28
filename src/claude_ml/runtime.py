@@ -484,7 +484,7 @@ class RuntimeEngine:
                 # TODO: Close position in database
                 # For now, just log and remove from tracking
                 del self.trailing_stops[symbol]
-                continue  # Skip signal generation for this bar
+                return  # Skip signal generation for this bar
 
         # Get adaptive thresholds for this symbol and regime
         early_thresh = self.threshold_engine.get_adaptive_threshold(
