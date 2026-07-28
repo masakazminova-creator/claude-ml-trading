@@ -73,7 +73,19 @@ jobs:
           echo "[Deploy] Viewing recent logs..."
           docker-compose logs --tail=20 claude-ml-trading
 
-          echo "[Deploy] ✅ Deployment complete!"
+          echo "[Deploy] Restarting ALL services to load new code..."
+          docker-compose down
+          sleep 5
+          docker-compose up -d
+          sleep 15
+
+          echo "[Deploy] Verifying all containers are running..."
+          docker-compose ps
+
+          echo "[Deploy] Checking telegram-bot logs..."
+          docker-compose logs --tail=30 telegram-bot
+
+          echo "[Deploy] ✅ Deployment complete - all services restarted with new code!"
         ENDSSH
 
     - name: Notify deployment result
