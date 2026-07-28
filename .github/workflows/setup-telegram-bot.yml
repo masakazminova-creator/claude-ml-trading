@@ -1,0 +1,67 @@
+name: 📱 Setup Telegram Bot
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      chat_id:
+        description: 'Your Telegram Chat ID'
+        required: true
+        default: '1050966161'
+
+jobs:
+  setup-telegram:
+    name: 🔧 Setup Telegram Bot on Server
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup SSH key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+    - name: Update .env with Chat ID
+      run: |
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+          set -e
+          cd /opt/claude-ml-trading
+
+          echo "[Setup] Updating Telegram Chat ID..."
+          sed -i "s/TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ github.event.inputs.chat_id }}/" .env
+
+          echo "[Setup] Verifying .env file..."
+          grep TELEGRAM_CHAT_ID .env || echo "No TELEGRAM_CHAT_ID found"
+
+          echo "[Setup] Pulling latest changes..."
+          git pull origin main
+
+          echo "[Setup] Building and restarting containers..."
+          docker-compose build --no-cache
+          docker-compose down
+          docker-compose up -d
+
+          echo "[Setup] Waiting for services to start..."
+          sleep 10
+
+          echo "[Setup] Checking container status..."
+          docker-compose ps
+
+          echo "[Setup] Viewing Telegram bot logs..."
+          docker-compose logs --tail=30 telegram-bot || echo "Telegram bot container not found"
+
+          echo "[Setup] ✅ Telegram bot setup complete!"
+          echo "[Setup] Now send /start to your bot in Telegram to test!"
+        ENDSSH
+
+    - name: Notify result
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "🎉 Telegram bot setup successful!"
+        else
+          echo "❌ Telegram bot setup failed!"
+        fi
