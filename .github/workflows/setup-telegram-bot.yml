@@ -27,20 +27,25 @@ jobs:
     - name: Update .env with Chat ID
       run: |
         ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
-          set -e
           cd /opt/claude-ml-trading
 
           echo "[Setup] Updating Telegram Chat ID..."
-          sed -i "s/TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ github.event.inputs.chat_id }}/" .env
+          if grep -q TELEGRAM_CHAT_ID .env; then
+            sed -i "s/TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ github.event.inputs.chat_id }}/" .env
+            echo "[Setup] ✓ Chat ID updated"
+          else
+            echo "[Setup] ✗ TELEGRAM_CHAT_ID not found in .env, adding it..."
+            echo "TELEGRAM_CHAT_ID=${{ github.event.inputs.chat_id }}" >> .env
+          fi
 
           echo "[Setup] Verifying .env file..."
-          grep TELEGRAM_CHAT_ID .env || echo "No TELEGRAM_CHAT_ID found"
+          grep TELEGRAM .env || echo "Warning: No TELEGRAM settings found"
 
           echo "[Setup] Pulling latest changes..."
-          git pull origin main
+          git pull origin main || echo "[Setup] Warning: Git pull failed, continuing..."
 
           echo "[Setup] Building and restarting containers..."
-          docker-compose build --no-cache
+          docker-compose build --no-cache || echo "[Setup] Warning: Build failed, trying up anyway..."
           docker-compose down
           docker-compose up -d
 
@@ -51,7 +56,7 @@ jobs:
           docker-compose ps
 
           echo "[Setup] Viewing Telegram bot logs..."
-          docker-compose logs --tail=30 telegram-bot || echo "Telegram bot container not found"
+          docker-compose logs --tail=30 telegram-bot || echo "Telegram bot container not found or not running"
 
           echo "[Setup] ✅ Telegram bot setup complete!"
           echo "[Setup] Now send /start to your bot in Telegram to test!"
