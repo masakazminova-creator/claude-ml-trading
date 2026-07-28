@@ -1,15 +1,16 @@
 """
-Signal Audit System - Track and analyze missed trading opportunities.
+Signal Audit System - Track ALL signals (including skipped ones) and their potential outcomes.
 
-Purpose: When you see a trade on chart but model didn't enter,
-this system helps you understand WHY the model skipped it.
+Purpose: Log every signal the system generates with:
+- Model probabilities/scores
+- Thresholds at that time
+- What would have happened if we entered
+- Actual outcome when trade is closed
 
-Features:
-- Logs every decision (enter/skip) with full context
-- Stores features, probabilities, regime at each bar
-- Allows post-hoc analysis of specific time periods
-- Compares what happened vs what model predicted
-- Generates detailed reports for missed signals
+This helps analyze:
+- How many signals were missed
+- What thresholds were used
+- Win rate of signals above/below threshold
 """
 
 from __future__ import annotations
@@ -19,35 +20,135 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
 
 class SignalAuditEngine:
-    """
-    Audits model decisions to understand why signals were missed.
-
-    Usage:
-    1. Enable audit logging in runtime
-    2. Every bar, log: features, probabilities, decision, regime
-    3. When you see missed opportunity, query by timestamp
-    4. Get full picture: why model skipped, what features looked like
-    """
+    """Logs all trading signals for post-hoc analysis."""
 
     def __init__(self, settings):
         self.settings = settings
         self.conn = sqlite3.connect(settings.runtime_db_path)
         self.conn.row_factory = sqlite3.Row
+        self._create_tables()
 
-        # Create audit table
-        self._create_audit_table()
-
-    def _create_audit_table(self) -> None:
-        """Create table for detailed audit logging."""
+    def _create_tables(self) -> None:
+        """Create audit logging tables."""
+        # Log all signals (even skipped ones)
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS signal_audit_log (
+            CREATE TABLE IF NOT EXISTS signal_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
                 symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                early_score REAL,
+                confirm_score REAL,
+                momentum_score REAL,
+                early_threshold REAL,
+                confirm_threshold REAL,
+                momentum_threshold REAL,
+                regime TEXT,
+                atr_pct REAL,
+                confidence_pct REAL,
+                position_size_pct REAL,
+                entry_price REAL,
+                exit_price REAL,
+                pnl_pct REAL,
+                exit_reason TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.commit()
+
+    def log_signal(
+        self,
+        ts: str,
+        symbol: str,
+        side: str,
+        decision: str,  # 'ENTER' or 'SKIP'
+        early_score: float,
+        confirm_score: float,
+        momentum_score: float,
+        early_threshold: float,
+        confirm_threshold: float,
+        momentum_threshold: float,
+        regime: str,
+        atr_pct: float,
+        confidence_pct: float,
+        position_size_pct: float,
+        entry_price: Optional[float] = None,
+    ) -> None:
+        """Log a signal with full context."""
+        self.conn.execute("""
+            INSERT INTO signal_log (
+                ts, symbol, side, decision,
+                early_score, confirm_score, momentum_score,
+                early_threshold, confirm_threshold, momentum_threshold,
+                regime, atr_pct, confidence_pct, position_size_pct,
+                entry_price
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            ts, symbol, side, decision,
+            early_score, confirm_score, momentum_score,
+            early_threshold, confirm_threshold, momentum_threshold,
+            regime, atr_pct, confidence_pct, position_size_pct,
+            entry_price
+        ))
+        self.conn.commit()
+
+    def update_signal_outcome(
+        self,
+        signal_id: int,
+        exit_price: float,
+        pnl_pct: float,
+        exit_reason: str,
+    ) -> None:
+        """Update a logged signal with actual outcome."""
+        self.conn.execute("""
+            UPDATE signal_log
+            SET exit_price = ?, pnl_pct = ?, exit_reason = ?
+            WHERE id = ?
+        """, (exit_price, pnl_pct, exit_reason, signal_id))
+        self.conn.commit()
+
+    def get_missed_signals(
+        self,
+        symbol: str = "BTCUSDT",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get recent signals that were skipped."""
+        rows = self.conn.execute("""
+            SELECT * FROM signal_log
+            WHERE symbol = ? AND decision = 'SKIP'
+            ORDER BY ts DESC
+            LIMIT ?
+        """, (symbol, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_signal_stats(self) -> Dict[str, Any]:
+        """Get statistics on all logged signals."""
+        stats = {}
+
+        # Total signals by decision
+        row = self.conn.execute("""
+            SELECT decision, COUNT(*) as count, AVG(confidence_pct) as avg_conf
+            FROM signal_log
+            GROUP BY decision
+        """).fetchone()
+        stats['by_decision'] = dict(row) if row else {}
+
+        # Signals by regime
+        row = self.conn.execute("""
+            SELECT regime, COUNT(*) as count
+            FROM signal_log
+            GROUP BY regime
+        """).fetchone()
+        stats['by_regime'] = dict(row) if row else {}
+
+        return stats
+
+    def close(self):
+        """Close database connection."""
+        self.conn.close()
 
                 -- Market state
                 close_price REAL NOT NULL,
