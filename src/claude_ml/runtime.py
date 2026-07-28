@@ -122,21 +122,33 @@ class RuntimeEngine:
         """Load early signal model."""
         path = self.settings.models_dir / "early_signal.joblib"
         if path.exists():
-            return EarlySignalModel.load(path)
+            try:
+                return EarlySignalModel.load(path)
+            except Exception as e:
+                logger.warning(f"Failed to load early model: {e}")
+                return None
         return None
 
     def _load_confirmation_model(self) -> Optional[ConfirmationModel]:
         """Load confirmation model."""
         path = self.settings.models_dir / "confirmation.joblib"
         if path.exists():
-            return ConfirmationModel.load(path)
+            try:
+                return ConfirmationModel.load(path)
+            except Exception as e:
+                logger.warning(f"Failed to load confirmation model: {e}")
+                return None
         return None
 
     def _load_momentum_model(self) -> Optional[MomentumModel]:
         """Load momentum model."""
         path = self.settings.models_dir / "momentum.joblib"
         if path.exists():
-            return MomentumModel.load(path)
+            try:
+                return MomentumModel.load(path)
+            except Exception as e:
+                logger.warning(f"Failed to load momentum model: {e}")
+                return None
         return None
 
     def _create_tables(self) -> None:

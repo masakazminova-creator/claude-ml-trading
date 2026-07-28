@@ -15,7 +15,7 @@ from typing import List, Optional
 from dotenv import load_dotenv
 
 
-ROOT_DIR = Path(__file__).resolve().parents[3]  # Two levels up from src/claude_ml
+ROOT_DIR = Path(__file__).resolve().parents[2]  # One level up from src/claude_ml (points to claude_ml_system/)
 load_dotenv(ROOT_DIR / ".env")
 
 

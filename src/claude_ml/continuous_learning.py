@@ -13,6 +13,7 @@ Features:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ from .feature_engineering import build_features
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
 from .models.momentum import MomentumModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -105,6 +108,7 @@ class ContinuousLearningEngine:
         self.base_training_lookback_bars = 2000  # Base lookback (~21 days on 15m)
         self.min_training_lookback_bars = 500    # Minimum in fast markets (~5 days)
         self.max_training_lookback_bars = 5000   # Maximum in stable markets (~52 days)
+        self.training_lookback_bars = self.base_training_lookback_bars  # Initialize with base value
 
         self.walk_forward_folds = 5
 
@@ -369,14 +373,14 @@ class ContinuousLearningEngine:
         lookback_bars = max(self.min_training_lookback_bars,
                            min(self.max_training_lookback_bars, lookback_bars))
 
-        print(f"[ADAPTIVE RETRAIN] ATR={atr_pct:.2f}%, WR_drop={recent_wr_drop:.1f}%")
-        print(f"[ADAPTIVE RETRAIN] Retrain every {retrain_interval} trades, lookback {lookback_bars} bars")
+        logger.info(f"[ADAPTIVE RETRAIN] ATR={atr_pct:.2f}%, WR_drop={recent_wr_drop:.1f}%")
+        logger.info(f"[ADAPTIVE RETRAIN] Retrain every {retrain_interval} trades, lookback {lookback_bars} bars")
 
         return retrain_interval, lookback_bars
 
     def fetch_recent_data(self, symbol: str = "BTCUSDT", lookback_bars: Optional[int] = None) -> pd.DataFrame:
         """Fetch recent market data for retraining."""
-        print(f"\n[RETRAIN] Fetching recent data for {symbol}...")
+        logger.info(f"\n[RETRAIN] Fetching recent data for {symbol}...")
 
         inst_id = f"{symbol.replace('USDT', '')}-USDT-SWAP"
         collector = OKXCollector(base_url=self.settings.okx_base_url, inst_id=inst_id)
@@ -387,7 +391,7 @@ class ContinuousLearningEngine:
             lookback_bars=self.training_lookback_bars
         )
 
-        print(f"[RETRAIN] Fetched {len(df)} candles")
+        logger.info(f"[RETRAIN] Fetched {len(df)} candles")
         return df
 
     def retrain_all_models(self, df: pd.DataFrame) -> RetrainingResult:
@@ -402,37 +406,53 @@ class ContinuousLearningEngine:
         5. Compare with current models
         6. Promote if better
         """
-        print(f"\n{'='*80}")
-        print(f"[RETRAIN] STARTING MODEL RETRAINING")
-        print(f"{'='*80}")
+        logger.info(f"\n{'='*80}")
+        logger.info(f"[RETRAIN] STARTING MODEL RETRAINING")
+        logger.info(f"{'='*80}")
 
         # Build features
-        print("[RETRAIN] Building features...")
+        logger.info("[RETRAIN] Building features...")
         featured = build_features(df)
-        print(f"[RETRAIN] Built {len(featured.columns)} features, {len(featured)} rows")
+        logger.info(f"[RETRAIN] Built {len(featured.columns)} features, {len(featured)} rows")
 
         # Create labels
-        from scripts.train_models import create_labels_for_early_signal, create_labels_for_momentum
+        from .feature_engineering import attach_labels as create_early_labels
+        from .feature_engineering import attach_labels as create_momentum_labels
 
-        labeled_early = create_labels_for_early_signal(featured)
-        labeled_momentum = create_labels_for_momentum(featured, horizon=3)
+        labeled_early = create_early_labels(
+            featured,
+            horizon_bars=6,
+            min_return_pct=float(self.settings.label_min_return_pct),
+            take_profit_pct=float(self.settings.take_profit_atr_multiplier),
+            stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
+            max_hold_bars=int(getattr(self.settings, 'max_hold_bars', 6)),
+        )
 
-        print(f"[RETRAIN] Labels created")
+        labeled_momentum = create_momentum_labels(
+            featured,
+            horizon_bars=3,
+            min_return_pct=0.2,
+            take_profit_pct=float(self.settings.take_profit_atr_multiplier),
+            stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
+            max_hold_bars=3,
+        )
+
+        logger.info(f"[RETRAIN] Labels created")
 
         # Train Early Signal Model
-        print("\n[RETRAIN] Training Early Signal Model...")
+        logger.info("\n[RETRAIN] Training Early Signal Model...")
         early_model = EarlySignalModel(threshold=self.settings.early_signal_threshold)
 
         try:
             early_model.train(labeled_early, "long_target", "long")
             early_model.train(labeled_early, "short_target", "short")
-            print("[RETRAIN] ✓ Early Signal trained")
+            logger.info("[RETRAIN] ✓ Early Signal trained")
         except Exception as e:
-            print(f"[RETRAIN] ✗ Early Signal failed: {e}")
+            logger.info(f"[RETRAIN] ✗ Early Signal failed: {e}")
             return RetrainingResult(triggered=False, reason=f"Training failed: {e}")
 
         # Train Confirmation Model
-        print("\n[RETRAIN] Training Confirmation Model...")
+        logger.info("\n[RETRAIN] Training Confirmation Model...")
         confirm_model = ConfirmationModel(
             threshold_long=self.settings.confirmation_threshold,
             threshold_short=self.settings.confirmation_threshold - 0.05,
@@ -441,13 +461,13 @@ class ContinuousLearningEngine:
         try:
             confirm_model.train(labeled_early, "long_target", "long", calibrate=True)
             confirm_model.train(labeled_early, "short_target", "short", calibrate=True)
-            print("[RETRAIN] ✓ Confirmation trained")
+            logger.info("[RETRAIN] ✓ Confirmation trained")
         except Exception as e:
-            print(f"[RETRAIN] ✗ Confirmation failed: {e}")
+            logger.info(f"[RETRAIN] ✗ Confirmation failed: {e}")
             return RetrainingResult(triggered=False, reason=f"Training failed: {e}")
 
         # Train Momentum Model
-        print("\n[RETRAIN] Training Momentum Model...")
+        logger.info("\n[RETRAIN] Training Momentum Model...")
         momentum_model = MomentumModel(
             threshold=self.settings.momentum_threshold,
             horizon_bars=3,
@@ -456,13 +476,13 @@ class ContinuousLearningEngine:
         try:
             momentum_model.train(labeled_momentum, "long")
             momentum_model.train(labeled_momentum, "short")
-            print("[RETRAIN] ✓ Momentum trained")
+            logger.info("[RETRAIN] ✓ Momentum trained")
         except Exception as e:
-            print(f"[RETRAIN] ✗ Momentum failed: {e}")
+            logger.info(f"[RETRAIN] ✗ Momentum failed: {e}")
             return RetrainingResult(triggered=False, reason=f"Training failed: {e}")
 
         # Save new models
-        print("\n[RETRAIN] Saving models...")
+        logger.info("\n[RETRAIN] Saving models...")
         early_path = self.settings.models_dir / "early_signal_new.joblib"
         confirm_path = self.settings.models_dir / "confirmation_new.joblib"
         momentum_path = self.settings.models_dir / "momentum_new.joblib"
@@ -471,7 +491,7 @@ class ContinuousLearningEngine:
         confirm_model.save(confirm_path)
         momentum_model.save(momentum_path)
 
-        print(f"[RETRAIN] Models saved to {self.settings.models_dir}")
+        logger.info(f"[RETRAIN] Models saved to {self.settings.models_dir}")
 
         # TODO: A/B test new models against current
         # For now, assume new is better (simple promotion)
@@ -484,10 +504,10 @@ class ContinuousLearningEngine:
             model_path=str(early_path),
         )
 
-        print(f"\n[RETRAIN] {'='*80}")
-        print(f"[RETRAIN] RETRAINING COMPLETE")
-        print(f"[RETRAIN] Models promoted: {promoted}")
-        print(f"{'='*80}\n")
+        logger.info(f"\n[RETRAIN] {'='*80}")
+        logger.info(f"[RETRAIN] RETRAINING COMPLETE")
+        logger.info(f"[RETRAIN] Models promoted: {promoted}")
+        logger.info(f"{'='*80}\n")
 
         return result
 
@@ -497,21 +517,21 @@ class ContinuousLearningEngine:
 
         Call this periodically (e.g., every hour or every N trades).
         """
-        print(f"\n{'='*80}")
-        print(f"[AUTO-LEARN] Checking system health...")
-        print(f"{'='*80}")
+        logger.info(f"\n{'='*80}")
+        logger.info(f"[AUTO-LEARN] Checking system health...")
+        logger.info(f"{'='*80}")
 
         # 1. Check performance
         metrics = self.check_performance()
-        print(f"[AUTO-LEARN] Trades: {metrics.total_trades}, WR: {metrics.win_rate}%, PF: {metrics.profit_factor}")
+        logger.info(f"[AUTO-LEARN] Trades: {metrics.total_trades}, WR: {metrics.win_rate}%, PF: {metrics.profit_factor}")
 
         # 2. Detect drift
         drift = self.detect_drift(metrics)
-        print(f"[AUTO-LEARN] Drift detected: {drift.is_drifting} (drop: {drift.precision_drop:.1f}%)")
+        logger.info(f"[AUTO-LEARN] Drift detected: {drift.is_drifting} (drop: {drift.precision_drop:.1f}%)")
 
         # 3. Decide if retrain needed
         should_retrain, reason = self.should_retrain(metrics, drift)
-        print(f"[AUTO-LEARN] Should retrain: {should_retrain} ({reason})")
+        logger.info(f"[AUTO-LEARN] Should retrain: {should_retrain} ({reason})")
 
         result = {
             "metrics": metrics,
@@ -523,39 +543,38 @@ class ContinuousLearningEngine:
 
         # 4. Retrain if needed
         if should_retrain:
-            print(f"\n[AUTO-LEARN] Triggering retraining...")
+            logger.info(f"\n[AUTO-LEARN] Triggering retraining...")
 
-            # Create labels for training
-        from .feature_engineering import attach_labels
+            # Fetch recent data for training
+            df = self.fetch_recent_data(symbol="BTCUSDT")
 
-        labeled_early = attach_labels(
-            featured,
-            horizon_bars=6,
-            min_return_pct=float(self.settings.label_min_return_pct),
-            take_profit_pct=float(self.settings.take_profit_atr_multiplier),
-            stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
-            max_hold_bars=int(self.settings.max_hold_bars if hasattr(self.settings, 'max_hold_bars') else 6),
-        )
+            if len(df) > 100:
+                # Create labels for training
+                from .feature_engineering import attach_labels
 
-        labeled_momentum = attach_labels(
-            featured,
-            horizon_bars=3,
-            min_return_pct=0.2,
-            take_profit_pct=float(self.settings.take_profit_atr_multiplier),
-            stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
-            max_hold_bars=3,
-        )
+                featured = attach_labels(
+                    df,
+                    horizon_bars=6,
+                    min_return_pct=float(self.settings.label_min_return_pct),
+                    take_profit_pct=float(self.settings.take_profit_atr_multiplier),
+                    stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
+                    max_hold_bars=int(getattr(self.settings, 'max_hold_bars', 6)),
+                )
 
-        # Retrain
-        retrain_result = self.retrain_all_models(df)
-        result["retraining_result"] = retrain_result
+                # Retrain
+                retrain_result = self.retrain_all_models(featured)
+                result["retraining_result"] = retrain_result
 
-        if retrain_result.promoted:
-            print(f"\n[AUTO-LEARN] ✓ New models promoted!")
+                if retrain_result.promoted:
+                    logger.info(f"\n[AUTO-LEARN] ✓ New models promoted!")
+                else:
+                    logger.info(f"\n[AUTO-LEARN] ⚠ Models not promoted (training failed)")
+            else:
+                logger.info(f"\n[AUTO-LEARN] ⚠ Not enough data for retraining ({len(df)} bars)")
         else:
-            print(f"\n[AUTO-LEARN] ⚠ Models not promoted (training failed)")
+            logger.info(f"\n[AUTO-LEARN] No retraining needed")
 
-        print(f"\n[AUTO-LEARN] Cycle complete\n")
+        logger.info(f"\n[AUTO-LEARN] Cycle complete\n")
         return result
 
     def close(self):
