@@ -54,56 +54,64 @@ jobs:
           echo "[Deploy] Navigating to project directory..."
           cd /opt/claude-ml-trading
 
+          # Save deployment info for debugging
+          echo "Deployment timestamp: $(date)" > /tmp/deploy_log.txt
+          echo "Git commit: $(git rev-parse HEAD)" >> /tmp/deploy_log.txt
+          echo "" >> /tmp/deploy_log.txt
+
           echo "[Deploy] Pulling latest changes..."
-          git pull origin main
+          git pull origin main 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo "[Deploy] Building Docker images..."
-          docker-compose build --no-cache
+          docker-compose build --no-cache 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo "[Deploy] Starting containers..."
           docker-compose down || true
-          docker-compose up -d
+          docker-compose up -d 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo "[Deploy] Waiting for services to start..."
           sleep 5
 
           echo "[Deploy] Checking container status..."
-          docker-compose ps
-
-          echo "[Deploy] Viewing recent logs..."
-          docker-compose logs --tail=20 claude-ml-trading
+          docker-compose ps 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo "[Deploy] Restarting ALL services to load new code..."
-          docker-compose down
+          docker-compose down 2>&1 | tee -a /tmp/deploy_log.txt
           sleep 5
-          docker-compose up -d
+          docker-compose up -d 2>&1 | tee -a /tmp/deploy_log.txt
           sleep 15
 
           echo "[Deploy] Verifying all containers are running..."
-          docker-compose ps
+          docker-compose ps 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo ""
           echo "[Deploy] === TELEGRAM BOT STATUS ==="
-          echo "[Deploy] Checking if telegram-bot container is running..."
-          docker-compose ps telegram-bot
+          echo "[Deploy] Checking telegram-bot container..."
+          docker-compose ps telegram-bot 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo ""
-          echo "[Deploy] Checking telegram-bot logs (last 50 lines)..."
-          docker-compose logs --tail=50 telegram-bot
+          echo "[Deploy] Telegram bot logs (last 50 lines)..."
+          docker-compose logs --tail=50 telegram-bot 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo ""
-          echo "[Deploy] Checking database file on server..."
-          ls -lh /opt/claude-ml-trading/data/runtime.sqlite || echo "DB not found in expected location"
+          echo "[Deploy] Runtime container logs (last 30 lines)..."
+          docker-compose logs --tail=30 claude-ml-trading 2>&1 | tee -a /tmp/deploy_log.txt
 
           echo ""
-          echo "[Deploy] Checking runtime container logs..."
-          docker-compose logs --tail=20 claude-ml-trading
+          echo "[Deploy] Database file check..."
+          ls -lh /opt/claude-ml-trading/data/runtime.sqlite 2>&1 | tee -a /tmp/deploy_log.txt
+          echo "" >> /tmp/deploy_log.txt
 
-          echo ""
-          echo "[Deploy] All Docker images:"
-          docker images | grep claude
+          echo "[Deploy] ✅ Deployment complete!"
+          echo "Full deployment log saved to /tmp/deploy_log.txt on server"
+        ENDSSH
 
-          echo "[Deploy] ✅ Deployment complete - all services restarted with new code!"
+    - name: Download deployment logs from server
+      if: always()
+      run: |
+        echo "Downloading deployment logs..."
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+          cat /tmp/deploy_log.txt 2>/dev/null || echo "Log file not found"
         ENDSSH
 
     - name: Notify deployment result
@@ -112,5 +120,5 @@ jobs:
         if [ "${{ job.status }}" == "success" ]; then
           echo "🎉 Deployment successful!"
         else
-          echo "❌ Deployment failed!"
+          echo "❌ Deployment failed! Check logs above for details."
         fi
