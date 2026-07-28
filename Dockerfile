@@ -27,6 +27,7 @@ RUN mkdir -p data models logs
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app/src
 
 # Expose port for monitoring (optional)
 EXPOSE 8000
