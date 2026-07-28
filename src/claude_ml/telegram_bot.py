@@ -41,17 +41,27 @@ class TradingBot:
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command."""
+        """Handle /start command with inline buttons."""
         welcome_msg = (
             "🤖 *Claude ML Trading Bot*\n\n"
             "Система автоматического трейдинга запущена!\n\n"
-            "📊 *Доступные команды:*\n"
-            "/balance - Текущий баланс и статистика\n"
-            "/trades - Последние сделки\n"
-            "/status - Статус системы\n\n"
-            "Уведомления о входах/выходах будут приходить автоматически."
+            "Используйте кнопки ниже для управления:"
         )
-        await update.message.reply_text(welcome_msg, parse_mode="Markdown")
+
+        # Create inline keyboard
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Баланс", callback_data="cmd_balance"),
+                InlineKeyboardButton("📈 Статус", callback_data="cmd_status"),
+            ],
+            [
+                InlineKeyboardButton("📊 Сделки", callback_data="cmd_trades"),
+                InlineKeyboardButton("🔄 Обновить", callback_data="refresh_balance"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(welcome_msg, parse_mode="Markdown", reply_markup=reply_markup)
 
     async def balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /balance command."""
@@ -224,10 +234,18 @@ class TradingBot:
         """Handle inline button clicks."""
         query = update.callback_query
 
-        if query.data == "refresh_balance":
-            # Simulate /balance command
+        if query.data == "cmd_balance":
+            await query.answer()
             await self.balance(update, context)
+        elif query.data == "cmd_status":
+            await query.answer()
+            await self.status(update, context)
+        elif query.data == "cmd_trades":
+            await query.answer()
+            await self.trades(update, context)
+        elif query.data == "refresh_balance":
             await query.answer("Баланс обновлён!")
+            await self.balance(update, context)
 
     def send_trade_notification(self, message: str):
         """Send trade notification to chat."""
