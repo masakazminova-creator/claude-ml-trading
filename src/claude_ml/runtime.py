@@ -89,6 +89,11 @@ class RuntimeEngine:
         # Initialize risk manager
         self.risk_manager = RiskManager(settings)
 
+        # Initialize database FIRST (before other engines that need DB)
+        self.conn = sqlite3.connect(settings.runtime_db_path)
+        self.conn.row_factory = sqlite3.Row
+        self._create_tables()
+
         # Initialize continuous learning engine
         self.learning_engine = ContinuousLearningEngine(settings)
         self.last_retrain_check = 0
@@ -107,11 +112,6 @@ class RuntimeEngine:
         self.trading_paused = False
         self.pause_reason = ""
         self.emergency_stop_triggered = False
-
-        # Initialize database
-        self.conn = sqlite3.connect(settings.runtime_db_path)
-        self.conn.row_factory = sqlite3.Row
-        self._create_tables()
 
         # Runtime state
         self.error_streak = 0
