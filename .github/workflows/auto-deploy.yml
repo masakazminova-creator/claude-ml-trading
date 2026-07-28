@@ -1,0 +1,86 @@
+name: 🚀 Auto Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Manual trigger from GitHub UI
+
+jobs:
+  test:
+    name: 🧪 Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --tb=short
+
+  deploy:
+    name: 🖥️ Deploy to Production Server
+    needs: test
+    runs-on: ubuntu-latest
+    if: success() || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup SSH key
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+    - name: Deploy to server via SSH
+      run: |
+        ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+          set -e
+
+          echo "[Deploy] Navigating to project directory..."
+          cd /opt/claude-ml-trading
+
+          echo "[Deploy] Pulling latest changes..."
+          git pull origin main
+
+          echo "[Deploy] Building Docker images..."
+          docker-compose build --no-cache
+
+          echo "[Deploy] Starting containers..."
+          docker-compose down || true
+          docker-compose up -d
+
+          echo "[Deploy] Waiting for services to start..."
+          sleep 5
+
+          echo "[Deploy] Checking container status..."
+          docker-compose ps
+
+          echo "[Deploy] Viewing recent logs..."
+          docker-compose logs --tail=20 claude-ml-trading
+
+          echo "[Deploy] ✅ Deployment complete!"
+        ENDSSH
+
+    - name: Notify deployment result
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "🎉 Deployment successful!"
+        else
+          echo "❌ Deployment failed!"
+        fi
