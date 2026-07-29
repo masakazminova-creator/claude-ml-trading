@@ -70,3 +70,57 @@ class TelegramNotifier:
         if offset is not None:
             params["offset"] = offset
         return self._request("getUpdates", params=params, timeout=timeout + 10)
+
+    def notify_trade_entry(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        position_size: float,
+        confidence: float,
+        timestamp: str,
+    ) -> None:
+        """Send notification when a trade is opened."""
+        emoji = "🟢" if side == "long" else "🔴"
+        message = (
+            f"{emoji} *НОВАЯ СДЕЛКА*\n\n"
+            f"Символ: `{symbol}`\n"
+            f"Направление: {side.upper()}\n"
+            f"Цена входа: ${entry_price:,.2f}\n"
+            f"Размер позиции: {position_size:.4f}\n"
+            f"Уверенность: {confidence:.1f}%\n"
+            f"Время входа: {timestamp[:19]}\n\n"
+            f"Система будет следить за позицией и уведомит о выходе."
+        )
+        try:
+            self.send_message(message)
+        except Exception as e:
+            print(f"Failed to send entry notification: {e}")
+
+    def notify_trade_exit(
+        self,
+        symbol: str,
+        side: str,
+        exit_price: float,
+        pnl_pct: float,
+        pnl_usdt: float,
+        exit_reason: str,
+        timestamp: str,
+    ) -> None:
+        """Send notification when a trade is closed."""
+        emoji = "✅" if pnl_pct >= 0 else "❌"
+        pnl_sign = "+" if pnl_pct >= 0 else ""
+        message = (
+            f"{emoji} *СДЕЛКА ЗАКРЫТА*\n\n"
+            f"Символ: `{symbol}`\n"
+            f"Направление: {side.upper()}\n"
+            f"Цена выхода: ${exit_price:,.2f}\n"
+            f"PnL: `{pnl_sign}{pnl_pct:.2f}%` (${pnl_sign}{pnl_usdt:.2f})\n"
+            f"Причина: {exit_reason}\n"
+            f"Время выхода: {timestamp[:19]}\n\n"
+            f"Ожидаю следующий сигнал..."
+        )
+        try:
+            self.send_message(message)
+        except Exception as e:
+            print(f"Failed to send exit notification: {e}")

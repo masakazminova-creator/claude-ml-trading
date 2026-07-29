@@ -146,10 +146,12 @@ class EarlySignalModel:
         proba = calibrated.predict_proba(test_df[available_features])[:, 1]
         pred = (proba >= self.threshold).astype(int)
 
-        # Feature importance
+        # Feature importance using permutation importance (works with all sklearn versions)
+        from sklearn.inspection import permutation_importance
+        perm_importance = permutation_importance(model, test_df[available_features], test_df[target_column].astype(int), n_repeats=5, random_state=42)
         importance = {
             name: float(score)
-            for name, score in zip(available_features, model.feature_importances_, strict=False)
+            for name, score in zip(available_features, perm_importance.importances_mean, strict=False)
         }
 
         report = {

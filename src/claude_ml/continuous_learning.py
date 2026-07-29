@@ -27,6 +27,7 @@ import numpy as np
 from .config import Settings
 from .data_collector import OKXCollector
 from .feature_engineering import build_features
+from .adaptive_labels import create_balanced_labels
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
 from .models.momentum import MomentumModel
@@ -109,6 +110,7 @@ class ContinuousLearningEngine:
         self.min_training_lookback_bars = 500    # Minimum in fast markets (~5 days)
         self.max_training_lookback_bars = 5000   # Maximum in stable markets (~52 days)
         self.training_lookback_bars = self.base_training_lookback_bars  # Initialize with base value
+        self.retrain_interval_trades = self.base_retrain_interval_trades  # Initialize adaptive interval
 
         self.walk_forward_folds = 5
 
@@ -300,8 +302,16 @@ class ContinuousLearningEngine:
         self.training_lookback_bars = adaptive_lookback
 
         # Retrain on adaptive interval
-        if metrics.total_trades % adaptive_interval == 0:
+        if metrics.total_trades > 0 and metrics.total_trades % adaptive_interval == 0:
             return True, f"Adaptive periodic retrain at {metrics.total_trades} trades (ATR={current_atr_pct:.2f}%, interval={adaptive_interval})"
+
+        # Time-based retraining check (even with 0 trades)
+        last_training_age_hours = self._get_model_age_hours()
+        max_age_hours = 48  # Retrain if models are older than 48 hours
+
+        if last_training_age_hours is None or last_training_age_hours > max_age_hours:
+            age_str = "unknown" if last_training_age_hours is None else f"{last_training_age_hours:.1f}h"
+            return True, f"Time-based retrain: models are {age_str} old (max: {max_age_hours}h)"
 
         # Retrain on drift
         if drift.is_drifting:
@@ -378,6 +388,26 @@ class ContinuousLearningEngine:
 
         return retrain_interval, lookback_bars
 
+    def _get_model_age_hours(self) -> Optional[float]:
+        """Get the age of the oldest model in hours."""
+        from pathlib import Path
+
+        model_dir = self.settings.models_dir
+        if not model_dir.exists():
+            return None
+
+        model_files = list(model_dir.glob("*.joblib"))
+        if not model_files:
+            return None
+
+        # Get modification times of all models
+        import time
+        now = time.time()
+        ages_hours = [(now - f.stat().st_mtime) / 3600 for f in model_files]
+
+        # Return age of oldest model
+        return max(ages_hours) if ages_hours else None
+
     def fetch_recent_data(self, symbol: str = "BTCUSDT", lookback_bars: Optional[int] = None) -> pd.DataFrame:
         """Fetch recent market data for retraining."""
         logger.info(f"\n[RETRAIN] Fetching recent data for {symbol}...")
@@ -415,25 +445,23 @@ class ContinuousLearningEngine:
         featured = build_features(df)
         logger.info(f"[RETRAIN] Built {len(featured.columns)} features, {len(featured)} rows")
 
-        # Create labels
-        from .feature_engineering import attach_labels as create_early_labels
-        from .feature_engineering import attach_labels as create_momentum_labels
-
-        labeled_early = create_early_labels(
+        # Create labels with adaptive min_return based on current volatility
+        logger.info("[RETRAIN] Creating adaptive labels...")
+        labeled_early = create_balanced_labels(
             featured,
             horizon_bars=6,
-            min_return_pct=float(self.settings.label_min_return_pct),
-            take_profit_pct=float(self.settings.take_profit_atr_multiplier),
-            stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
+            base_min_return_pct=float(self.settings.label_min_return_pct),
+            take_profit_mult=float(self.settings.take_profit_atr_multiplier),
+            stop_loss_mult=float(self.settings.stop_loss_atr_multiplier),
             max_hold_bars=int(getattr(self.settings, 'max_hold_bars', 6)),
         )
 
-        labeled_momentum = create_momentum_labels(
+        labeled_momentum = create_balanced_labels(
             featured,
             horizon_bars=3,
-            min_return_pct=0.2,
-            take_profit_pct=float(self.settings.take_profit_atr_multiplier),
-            stop_loss_pct=float(self.settings.stop_loss_atr_multiplier),
+            base_min_return_pct=0.20,
+            take_profit_mult=float(self.settings.take_profit_atr_multiplier) * 0.5,
+            stop_loss_mult=float(self.settings.stop_loss_atr_multiplier) * 0.5,
             max_hold_bars=3,
         )
 
