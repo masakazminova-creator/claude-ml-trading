@@ -177,15 +177,30 @@ class TradingBot:
             msg = "📊 *Последние 10 сделок:*\n\n"
             for trade in trades:
                 entry_ts, symbol, side, entry_price, pnl_pct, exit_reason = trade
+
+                # Handle None values safely
+                if pnl_pct is None:
+                    pnl_pct = 0.0
+                if entry_price is None:
+                    entry_price = 0.0
+                if exit_reason is None:
+                    exit_reason = "N/A"
+
                 pnl_sign = "+" if pnl_pct >= 0 else ""
-                emoji = "🟢" if pnl_pct and pnl_pct > 0 else "🔴" if pnl_pct and pnl_pct < 0 else "⚪"
+                emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+
+                # Escape special characters in strings
+                symbol_str = str(symbol).replace('_', r'\_') if symbol else "N/A"
+                side_str = str(side).upper().replace('_', r'\_') if side else "N/A"
+                exit_str = str(exit_reason).replace('_', r'\_')
+                ts_str = str(entry_ts)[:19] if entry_ts else 'N/A'
 
                 msg += (
-                    f"{emoji} *{symbol}* {side.upper()}\n"
-                    f"   Entry: ${entry_price:.2f}\n"
+                    f"{emoji} *{symbol_str}* {side_str}\n"
+                    f"   Entry: \\${entry_price:.2f}\n"
                     f"   PnL: `{pnl_sign}{pnl_pct:.2f}%`\n"
-                    f"   Exit: {exit_reason}\n"
-                    f"   Time: {entry_ts[:19] if entry_ts else 'N/A'}\n\n"
+                    f"   Exit: {exit_str}\n"
+                    f"   Time: {ts_str}\n\n"
                 )
 
             await update.message.reply_text(msg, parse_mode="Markdown")
@@ -250,18 +265,28 @@ class TradingBot:
         """Handle inline button clicks."""
         query = update.callback_query
 
+        # Create a fake update object with the original message for command handlers
+        from telegram import Message
+        fake_update = update
+        if query.message:
+            # Create a proper update with message
+            fake_update = Update(
+                update_id=update.update_id,
+                message=query.message
+            )
+
         if query.data == "cmd_balance":
             await query.answer()
-            await self.balance(update, context)
+            await self.balance(fake_update, context)
         elif query.data == "cmd_status":
             await query.answer()
-            await self.status(update, context)
+            await self.status(fake_update, context)
         elif query.data == "cmd_trades":
             await query.answer()
-            await self.trades(update, context)
+            await self.trades(fake_update, context)
         elif query.data == "refresh_balance":
             await query.answer("Баланс обновлён!")
-            await self.balance(update, context)
+            await self.balance(fake_update, context)
 
     def send_trade_notification(self, message: str):
         """Send trade notification to chat."""
