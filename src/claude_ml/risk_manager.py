@@ -120,18 +120,21 @@ class RiskManager:
         # Cap at max position size
         adjusted_size_pct = min(adjusted_size_pct, self.settings.max_position_size_pct)
 
-        # NO FIXED TP - Use only trailing stop for maximum profit potential
-        # BUT KEEP WIDE SL FOR CATASTROPHE PROTECTION
-        take_profit_price = None  # Not used - trailing stop handles exit
+        # NEW STRATEGY: TP triggers trailing stop activation
+        # Fixed TP acts as trigger, not exit - activates trailing stop when reached
+        tp_distance = atr * self.settings.take_profit_atr_multiplier
+        sl_distance = atr * self.settings.stop_loss_atr_multiplier
 
-        # Wide emergency stop loss (5x ATR) - protects from flash crashes
-        sl_distance = atr * 5.0
-        stop_loss_price = entry_price - sl_distance if side == "long" else entry_price + sl_distance
+        if side == "long":
+            take_profit_price = entry_price + tp_distance
+            stop_loss_price = entry_price - sl_distance
+            trailing_trigger_price = take_profit_price  # Activate trailing stop AT TP level
+        else:
+            take_profit_price = entry_price - tp_distance
+            stop_loss_price = entry_price + sl_distance
+            trailing_trigger_price = take_profit_price
 
-        # Trailing stop activation
-        trailing_trigger_price = entry_price + (atr * self.settings.trailing_trigger_atr_multiplier) if side == "long" else entry_price - (atr * self.settings.trailing_trigger_atr_multiplier)
-
-        # Calculate actual risk amount (based on wide emergency SL)
+        # Calculate actual risk amount (based on SL distance)
         risk_per_unit = abs(entry_price - stop_loss_price)
         position_units = (self.current_balance * adjusted_size_pct / 100) / entry_price
         risk_amount = position_units * risk_per_unit
@@ -140,9 +143,9 @@ class RiskManager:
         return PositionSizeResult(
             base_size_pct=base_size_pct,
             adjusted_size_pct=round(adjusted_size_pct, 2),
-            take_profit_price=None,  # No fixed TP - trailing stop only
-            stop_loss_price=round(stop_loss_price, 6),  # Wide emergency SL
-            trailing_trigger_price=round(trailing_trigger_price, 6),
+            take_profit_price=round(take_profit_price, 6),  # TP triggers trailing stop
+            stop_loss_price=round(stop_loss_price, 6),      # Initial SL
+            trailing_trigger_price=round(trailing_trigger_price, 6),  # Activated at TP
             risk_amount=round(risk_amount, 2),
             max_loss_pct=round(max_loss_pct, 2),
             reasoning=reasoning,
