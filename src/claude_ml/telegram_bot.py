@@ -93,14 +93,14 @@ class TradingBot:
                 WHERE status IN ('closed', 'shadow_closed') AND pnl_pct IS NOT NULL
             """)
             total_pnl_row = cursor.fetchone()
-            total_pnl = total_pnl_row[0] if total_pnl_row and total_pnl_row[0] else 0.0
+            total_pnl = float(total_pnl_row[0]) if total_pnl_row and total_pnl_row[0] is not None else 0.0
 
             # Get trade count
             cursor.execute("""
                 SELECT COUNT(*) FROM paper_trades
                 WHERE status IN ('closed', 'shadow_closed')
             """)
-            trade_count = cursor.fetchone()[0]
+            trade_count = int(cursor.fetchone()[0])
 
             # Get win rate
             cursor.execute("""
@@ -111,34 +111,34 @@ class TradingBot:
                 WHERE status IN ('closed', 'shadow_closed') AND pnl_pct IS NOT NULL
             """)
             wr_row = cursor.fetchone()
-            wins = wr_row[0] if wr_row[0] else 0
-            total = wr_row[1] if wr_row[1] else 0
-            win_rate = (wins / total * 100) if total > 0 else 0
+            wins = int(wr_row[0]) if wr_row and wr_row[0] is not None else 0
+            total_trades = int(wr_row[1]) if wr_row and wr_row[1] is not None else 0
+            win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
 
             # Calculate drawdown
             cursor.execute("""
                 SELECT MAX(balance) FROM equity_curve
             """)
             peak_row = cursor.fetchone()
-            peak_balance = peak_row[0] if peak_row[0] else current_balance
-            drawdown = ((peak_balance - current_balance) / peak_balance * 100) if peak_balance > 0 else 0
+            peak_balance = float(peak_row[0]) if peak_row and peak_row[0] is not None else current_balance
+            drawdown = ((peak_balance - current_balance) / peak_balance * 100) if peak_balance > 0 else 0.0
 
             conn.close()
 
-            # Format message
+            # Format message with safe values
             pnl_sign = "+" if total_pnl >= 0 else ""
             dd_sign = "-" if drawdown > 0 else ""
 
             msg = (
                 f"💰 *Trading Balance*\n\n"
-                f"Текущий баланс: `${current_balance:.2f}`\n"
+                f"Текущий баланс: `${current_balance:,.2f}`\n"
                 f"Общий PnL: `{pnl_sign}{total_pnl:.2f}%`\n"
-                f"Peak баланс: `${peak_balance:.2f}`\n"
+                f"Peak баланс: `${peak_balance:,.2f}`\n"
                 f"Drawdown: `{dd_sign}{drawdown:.2f}%`\n\n"
                 f"📊 *Статистика:*\n"
                 f"Всего сделок: `{trade_count}`\n"
                 f"Win Rate: `{win_rate:.1f}%`\n"
-                f"Wins: `{wins}` | Losses: `{total - wins}`"
+                f"Wins: `{wins}` | Losses: `{total_trades - wins}`"
             )
 
             # Add refresh button
