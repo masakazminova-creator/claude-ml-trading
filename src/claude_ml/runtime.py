@@ -575,8 +575,7 @@ class RuntimeEngine:
 
                     # Send Telegram notification for entry
                     try:
-                        from telegram import Bot
-                        bot = Bot(token=self.settings.telegram_bot_token)
+                        import requests
                         entry_msg = (
                             f"🔔 *NEW TRADE ENTRY*\n\n"
                             f"Symbol: `{symbol}`\n"
@@ -590,8 +589,17 @@ class RuntimeEngine:
                             f"Regime: `{regime_name}`\n"
                             f"Reasoning: {'; '.join(decision.reasoning[:3])}"
                         )
-                        bot.send_message(chat_id=self.settings.telegram_chat_id, text=entry_msg, parse_mode="Markdown")
-                        logger.info("Telegram entry notification sent")
+                        url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
+                        data = {
+                            "chat_id": self.settings.telegram_chat_id,
+                            "text": entry_msg,
+                            "parse_mode": "Markdown"
+                        }
+                        response = requests.post(url, json=data, timeout=10)
+                        if response.status_code == 200:
+                            logger.info("Telegram entry notification sent")
+                        else:
+                            logger.warning(f"Telegram API error: {response.text}")
                     except Exception as e:
                         logger.warning(f"Failed to send Telegram entry notification: {e}")
 
