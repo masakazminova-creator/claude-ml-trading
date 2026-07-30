@@ -589,7 +589,7 @@ class RuntimeEngine:
                         side=decision.side,
                     )
 
-                    logger.info(f"         Trailing Stop Only (no fixed TP/SL)")
+                    logger.info(f"         Emergency SL: {risk_result.stop_loss_price:.4f} | Trailing Stop Active")
                     logger.info(f"         Risk: ${risk_result.risk_amount:.2f}")
 
                     # CREATE PAPER TRADE RECORD (no fixed TP/SL - trailing stop only)
