@@ -548,6 +548,17 @@ class RuntimeEngine:
 
                 # Calculate position size via risk manager
                 if decision.action.startswith("enter"):
+                    # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
+                    existing_position = self.conn.execute("""
+                        SELECT id FROM paper_trades
+                        WHERE symbol = ? AND status = 'open'
+                        ORDER BY id DESC LIMIT 1
+                    """, (symbol,)).fetchone()
+
+                    if existing_position:
+                        logger.debug(f"[{symbol}] Position already open (id={existing_position[0]}), skipping duplicate signal")
+                        continue  # Skip this cycle - already in position
+
                     risk_result = self.risk_manager.calculate_position_size(
                         symbol=symbol,
                         entry_price=close_price,
@@ -560,6 +571,23 @@ class RuntimeEngine:
                     logger.info(f"         TP: {risk_result.take_profit_price:.4f} | "
                           f"SL: {risk_result.stop_loss_price:.4f} | "
                           f"Risk: ${risk_result.risk_amount:.2f}")
+
+                    # CREATE PAPER TRADE RECORD
+                    trade_id = self.conn.execute("""
+                        INSERT INTO paper_trades (
+                            ts, symbol, side, entry_price, position_size_pct,
+                            confidence, take_profit_price, stop_loss_price,
+                            regime, reasoning, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                        RETURNING id
+                    """, (
+                        latest_ts.isoformat(), symbol, decision.side, close_price,
+                        risk_result.adjusted_size_pct, decision.confidence / 100,
+                        risk_result.take_profit_price, risk_result.stop_loss_price,
+                        regime_name, '; '.join(decision.reasoning[:3])
+                    )).fetchone()[0]
+
+                    logger.info(f"[{symbol}] Paper trade created: id={trade_id}")
 
                     # Create ATR-based trailing stop
                     trailing_state = create_trailing_stop(
