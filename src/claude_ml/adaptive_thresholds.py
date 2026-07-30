@@ -96,6 +96,9 @@ class AdaptiveThresholdEngine:
         # Load historical characteristics
         self.symbol_characteristics = self._load_symbol_characteristics()
 
+        # Load saved threshold state from database
+        self._load_state()
+
     def _load_symbol_characteristics(self) -> Dict[str, SymbolCharacteristics]:
         """Load historical performance data for each symbol from database."""
         characteristics = {}
@@ -262,23 +265,22 @@ class AdaptiveThresholdEngine:
         # Apply safety bounds
         adjusted = max(min_val, min(max_val, adjusted))
 
-        # Smooth transition (blend 70% old, 30% new)
+        # Smooth transition (blend 70% old, 30% new) - use local variable to avoid accumulation
         if threshold_type == "early_signal":
-            current = base.early_signal_threshold
+            current = base_value  # Use original base_value, not the accumulated threshold
             smoothed = 0.7 * current + 0.3 * adjusted
-            base.early_signal_threshold = smoothed
         elif threshold_type == "confirmation":
-            current = base.confirmation_threshold
+            current = base_value
             smoothed = 0.7 * current + 0.3 * adjusted
-            base.confirmation_threshold = smoothed
         else:
-            current = base.momentum_threshold
+            current = base_value
             smoothed = 0.7 * current + 0.3 * adjusted
-            base.momentum_threshold = smoothed
 
+        # Don't update base thresholds - they should remain constant
+        # Only store the last updated timestamp
         base.last_updated = datetime.now(timezone.utc).isoformat()
 
-        print(f"[ADAPTIVE] {symbol} {threshold_type}: final_threshold={smoothed:.3f}\n")
+        print(f"[ADAPTIVE] {symbol} {threshold_type}: base={base_value:.3f}, adjusted={adjusted:.3f}, final={smoothed:.3f}\n")
 
         return smoothed
 
@@ -291,6 +293,26 @@ class AdaptiveThresholdEngine:
             chars.avg_win_rate = (1 - alpha) * chars.avg_win_rate + alpha * new_wr
             chars.avg_profit_factor = (1 - alpha) * chars.avg_profit_factor + alpha * new_pf
             chars.total_trades += 1
+
+    def _load_state(self) -> None:
+        """Load saved threshold state from database."""
+        row = self.conn.execute("""
+            SELECT value FROM runtime_state WHERE key = 'adaptive_thresholds'
+        """).fetchone()
+
+        if row:
+            try:
+                state = json.loads(row['value'])
+                for symbol, data in state.items():
+                    if symbol in self.base_thresholds:
+                        thresh = self.base_thresholds[symbol]
+                        thresh.early_signal_threshold = data.get("early_signal_threshold", thresh.early_signal_threshold)
+                        thresh.confirmation_threshold = data.get("confirmation_threshold", thresh.confirmation_threshold)
+                        thresh.momentum_threshold = data.get("momentum_threshold", thresh.momentum_threshold)
+                        thresh.last_updated = data.get("last_updated", "")
+                print(f"[ADAPTIVE] Loaded saved thresholds: {list(state.keys())}")
+            except Exception as e:
+                print(f"[ADAPTIVE] Failed to load saved thresholds: {e}")
 
     def save_state(self) -> None:
         """Save current threshold state to database."""

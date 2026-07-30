@@ -313,6 +313,9 @@ class RuntimeEngine:
         self._log_health("ok", f"Processed {len(self.settings.symbols)} symbols")
         logger.debug("Health logged")
 
+        # Save adaptive thresholds state
+        self.threshold_engine.save_state()
+
     def _check_and_retrain(self) -> None:
         """Check performance and retrain models if needed."""
         logger.info("=== AUTOMATIC LEARNING CHECK ===")
