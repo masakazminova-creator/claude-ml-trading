@@ -573,15 +573,24 @@ class RuntimeEngine:
                           f"Risk: ${risk_result.risk_amount:.2f}")
 
                     # CREATE PAPER TRADE RECORD
+                    import json
+                    payload = {
+                        "confidence": decision.confidence,
+                        "regime": regime_name,
+                        "atr_pct": atr_pct,
+                        "reasoning": decision.reasoning[:3]
+                    }
                     self.conn.execute("""
                         INSERT INTO paper_trades (
                             symbol, side, entry_ts, entry_price, stage,
-                            signal_probability, take_profit_pct, stop_loss_pct, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                            signal_probability, take_profit_pct, stop_loss_pct,
+                            payload_json, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
                     """, (
                         symbol, decision.side, latest_ts.isoformat(), close_price,
                         'full', decision.confidence / 100,
-                        risk_result.take_profit_price, risk_result.stop_loss_price
+                        risk_result.take_profit_price, risk_result.stop_loss_price,
+                        json.dumps(payload)
                     ))
 
                     logger.info(f"[{symbol}] Paper trade created")
