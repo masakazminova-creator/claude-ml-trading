@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import requests
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -76,7 +77,7 @@ class RuntimeEngine:
 
         # Initialize ensemble engine (only if all models loaded)
         self.ensemble: Optional[EnsembleEngine] = None
-        if all([self.early_model, self.confirmation_model, self.momentum_model]):
+        if all(m is not None for m in [self.early_model, self.confirmation_model, self.momentum_model]):
             self.ensemble = EnsembleEngine(
                 early_model=self.early_model,
                 confirmation_model=self.confirmation_model,
@@ -474,10 +475,22 @@ class RuntimeEngine:
                 logger.info(f"[{symbol}] TRAILING STOP HIT at {close_price:.4f}")
                 logger.info(f"         PnL: {pnl_pct:.2f}%")
 
+                # CLOSE POSITION IN DATABASE FIRST
+                self.conn.execute("""
+                    UPDATE paper_trades
+                    SET status = 'closed',
+                        exit_ts = ?,
+                        exit_price = ?,
+                        pnl_pct = ?,
+                        exit_reason = 'trailing_stop'
+                    WHERE symbol = ? AND status = 'open'
+                """, (latest_ts.isoformat(), close_price, pnl_pct, symbol))
+
+                logger.info(f"[{symbol}] Position closed in database")
+
                 # Send Telegram notification for exit
                 try:
-                    from telegram import Bot
-                    bot = Bot(token=self.settings.telegram_bot_token)
+                    import requests
                     pnl_sign = "+" if pnl_pct >= 0 else ""
                     pnl_emoji = "🟢" if pnl_pct > 0 else "🔴"
                     exit_msg = (
@@ -491,13 +504,21 @@ class RuntimeEngine:
                         f"Highest Price: `${trailing_state.highest_price:.2f}`\n"
                         f"Final Stop: `${trailing_state.current_stop_price:.2f}`"
                     )
-                    bot.send_message(chat_id=self.settings.telegram_chat_id, text=exit_msg, parse_mode="Markdown")
-                    logger.info("Telegram exit notification sent")
+                    url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
+                    data = {
+                        "chat_id": self.settings.telegram_chat_id,
+                        "text": exit_msg,
+                        "parse_mode": "Markdown"
+                    }
+                    response = requests.post(url, json=data, timeout=10)
+                    if response.status_code == 200:
+                        logger.info("Telegram exit notification sent")
+                    else:
+                        logger.warning(f"Telegram API error: {response.text}")
                 except Exception as e:
                     logger.warning(f"Failed to send Telegram exit notification: {e}")
 
-                # TODO: Close position in database
-                # For now, just log and remove from tracking
+                # Remove from trailing stops tracking
                 del self.trailing_stops[symbol]
                 return  # Skip signal generation for this bar
 
@@ -573,7 +594,6 @@ class RuntimeEngine:
                           f"Risk: ${risk_result.risk_amount:.2f}")
 
                     # CREATE PAPER TRADE RECORD
-                    import json
                     payload = {
                         "confidence": decision.confidence,
                         "regime": regime_name,
@@ -609,7 +629,6 @@ class RuntimeEngine:
 
                     # Send Telegram notification for entry
                     try:
-                        import requests
                         entry_msg = (
                             f"🔔 *NEW TRADE ENTRY*\n\n"
                             f"Symbol: `{symbol}`\n"

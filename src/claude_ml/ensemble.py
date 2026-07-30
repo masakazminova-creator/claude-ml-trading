@@ -90,7 +90,13 @@ class EnsembleEngine:
         momentum_score_short = momentum_short.score if momentum_short else 0
         momentum_result = momentum_long if momentum_score_long > momentum_score_short else momentum_short
 
-        side = confirm_result.side if confirm_result else ("long" if early_result and early_result.side == "long" else "short")
+        # Determine side with clear priority: confirmation > early signal > default short
+        if confirm_result:
+            side = confirm_result.side
+        elif early_result and early_result.side:
+            side = early_result.side
+        else:
+            side = "short"  # Conservative default when no signals
 
         # Decision logic based on model agreement
         agreements = []

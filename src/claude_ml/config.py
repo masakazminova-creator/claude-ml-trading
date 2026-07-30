@@ -75,7 +75,7 @@ class Settings:
 
     # === Feature Engineering ===
     label_horizon_bars: int = int(_env("LABEL_HORIZON_BARS", "6"))
-    label_min_return_pct: float = float(_env("LABEL_MIN_RETURN_PCT", "0.35"))
+    label_min_return_pct: float = float(_env("LABEL_MIN_RETURN_PCT", "0.20"))  # Updated to match .env
     atr_period: int = int(_env("ATR_PERIOD", "14"))
     rsi_period: int = int(_env("RSI_PERIOD", "14"))
     ema_fast: int = int(_env("EMA_FAST", "8"))

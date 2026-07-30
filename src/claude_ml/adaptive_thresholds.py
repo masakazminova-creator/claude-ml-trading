@@ -265,16 +265,8 @@ class AdaptiveThresholdEngine:
         # Apply safety bounds
         adjusted = max(min_val, min(max_val, adjusted))
 
-        # Smooth transition (blend 70% old, 30% new) - use local variable to avoid accumulation
-        if threshold_type == "early_signal":
-            current = base_value  # Use original base_value, not the accumulated threshold
-            smoothed = 0.7 * current + 0.3 * adjusted
-        elif threshold_type == "confirmation":
-            current = base_value
-            smoothed = 0.7 * current + 0.3 * adjusted
-        else:
-            current = base_value
-            smoothed = 0.7 * current + 0.3 * adjusted
+        # Smooth transition (blend 70% old, 30% new) - simplified single formula
+        smoothed = 0.7 * base_value + 0.3 * adjusted
 
         # Don't update base thresholds - they should remain constant
         # Only store the last updated timestamp
