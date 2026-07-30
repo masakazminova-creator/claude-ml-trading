@@ -547,7 +547,7 @@ class RuntimeEngine:
                 print(f"         Reasoning: {'; '.join(decision.reasoning[:3])}")
 
                 # Calculate position size via risk manager
-                if decision.action.startswith("enter"):
+                if decision.action.upper().startswith("ENTER"):
                     # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
                     existing_position = self.conn.execute("""
                         SELECT id FROM paper_trades
