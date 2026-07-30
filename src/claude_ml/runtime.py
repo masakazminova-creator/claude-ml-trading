@@ -557,7 +557,7 @@ class RuntimeEngine:
 
                     if existing_position:
                         logger.debug(f"[{symbol}] Position already open (id={existing_position[0]}), skipping duplicate signal")
-                        continue  # Skip this cycle - already in position
+                        return  # Skip this cycle - already in position
 
                     risk_result = self.risk_manager.calculate_position_size(
                         symbol=symbol,
