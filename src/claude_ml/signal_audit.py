@@ -149,19 +149,6 @@ class SignalAuditEngine:
     def close(self):
         """Close database connection."""
         self.conn.close()
-
-                -- Market state
-                close_price REAL NOT NULL,
-                atr_pct REAL,
-                regime TEXT,
-
-                -- Model predictions
-                early_probability REAL,
-                confirmation_probability REAL,
-                momentum_score REAL,
-
-                -- Adaptive thresholds
-                adaptive_early_threshold REAL,
                 adaptive_confirmation_threshold REAL,
                 adaptive_momentum_threshold REAL,
 
