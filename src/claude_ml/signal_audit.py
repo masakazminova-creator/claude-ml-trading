@@ -149,14 +149,6 @@ class SignalAuditEngine:
     def close(self):
         """Close database connection."""
         self.conn.close()
-                next_6bar_return REAL,
-                next_high REAL,
-                next_low REAL,
-
-                payload_json TEXT
-            )
-        """)
-        self.conn.commit()
 
     def log_decision(
         self,
