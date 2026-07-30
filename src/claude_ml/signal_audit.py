@@ -149,19 +149,6 @@ class SignalAuditEngine:
     def close(self):
         """Close database connection."""
         self.conn.close()
-                adaptive_confirmation_threshold REAL,
-                adaptive_momentum_threshold REAL,
-
-                -- Decision
-                action TEXT NOT NULL,  -- 'enter', 'skip', 'wait'
-                action_reason TEXT,    -- Why this action was taken
-
-                -- Features snapshot (JSON)
-                features_json TEXT,
-
-                -- What would have happened
-                next_1bar_return REAL,
-                next_3bar_return REAL,
                 next_6bar_return REAL,
                 next_high REAL,
                 next_low REAL,
