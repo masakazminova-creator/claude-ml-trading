@@ -82,10 +82,19 @@ class TradingBot:
             if row:
                 current_balance = row[0]
             else:
-                # Fallback to start balance
-                cursor.execute("SELECT value FROM runtime_state WHERE key='start_balance'")
+                # Calculate from paper_trades PnL
+                cursor.execute("SELECT value FROM runtime_state WHERE key='paper_start_balance'")
                 row = cursor.fetchone()
-                current_balance = float(row[0]) if row else 10000.0
+                start_balance = float(row[0]) if row else 10000.0
+
+                cursor.execute("""
+                    SELECT SUM(pnl_pct) FROM paper_trades
+                    WHERE status IN ('closed', 'shadow_closed') AND pnl_pct IS NOT NULL
+                """)
+                pnl_result = cursor.fetchone()
+                total_pnl_pct = float(pnl_result[0]) if pnl_result and pnl_result[0] is not None else 0.0
+
+                current_balance = start_balance * (1 + total_pnl_pct / 100)
 
             # Get total PnL
             cursor.execute("""
