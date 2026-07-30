@@ -471,9 +471,19 @@ class RuntimeEngine:
 
             # Check if stop hit
             if check_trailing_stop_exit(trailing_state, close_price):
-                pnl_pct = ((close_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
+                # Calculate raw price PnL
+                raw_pnl_pct = ((close_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
+
+                # Subtract trading costs (fee + slippage for both entry and exit)
+                total_cost_bps = self.settings.fee_bps * 2 + self.settings.slippage_bps * 2  # Entry + Exit
+                cost_pct = total_cost_bps / 100  # Convert basis points to percentage
+
+                net_pnl_pct = raw_pnl_pct - cost_pct
+
                 logger.info(f"[{symbol}] TRAILING STOP HIT at {close_price:.4f}")
-                logger.info(f"         PnL: {pnl_pct:.2f}%")
+                logger.info(f"         Gross PnL: {raw_pnl_pct:+.3f}%")
+                logger.info(f"         Trading Costs: -{cost_pct:.3f}% (fee+slippage)")
+                logger.info(f"         Net PnL: {net_pnl_pct:+.3f}%")
 
                 # CLOSE POSITION IN DATABASE FIRST
                 self.conn.execute("""
@@ -484,22 +494,24 @@ class RuntimeEngine:
                         pnl_pct = ?,
                         exit_reason = 'trailing_stop'
                     WHERE symbol = ? AND status = 'open'
-                """, (latest_ts.isoformat(), close_price, pnl_pct, symbol))
+                """, (latest_ts.isoformat(), close_price, net_pnl_pct, symbol))
 
                 logger.info(f"[{symbol}] Position closed in database")
 
                 # Send Telegram notification for exit
                 try:
                     import requests
-                    pnl_sign = "+" if pnl_pct >= 0 else ""
-                    pnl_emoji = "🟢" if pnl_pct > 0 else "🔴"
+                    pnl_sign = "+" if net_pnl_pct >= 0 else ""
+                    pnl_emoji = "🟢" if net_pnl_pct > 0 else "🔴"
                     exit_msg = (
                         f"{pnl_emoji} *TRADE CLOSED*\n\n"
                         f"Symbol: `{symbol}`\n"
                         f"Side: *{trailing_state.side.upper()}*\n"
                         f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
                         f"Exit Price: `${close_price:.2f}`\n"
-                        f"PnL: `{pnl_sign}{pnl_pct:.2f}%`\n\n"
+                        f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
+                        f"Costs: `-{cost_pct:.3f}%`\n"
+                        f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
                         f"Exit Reason: *Trailing Stop Hit*\n"
                         f"Highest Price: `${trailing_state.highest_price:.2f}`\n"
                         f"Final Stop: `${trailing_state.current_stop_price:.2f}`"
