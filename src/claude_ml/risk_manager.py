@@ -120,21 +120,15 @@ class RiskManager:
         # Cap at max position size
         adjusted_size_pct = min(adjusted_size_pct, self.settings.max_position_size_pct)
 
-        # 7. Calculate ATR-based TP/SL
-        tp_distance = atr * self.settings.take_profit_atr_multiplier
-        sl_distance = atr * self.settings.stop_loss_atr_multiplier
+        # NO FIXED TP/SL - Use only trailing stop for maximum profit potential
+        # Trailing stop will be created in runtime.py after position is opened
+        take_profit_price = None  # Not used - trailing stop handles exit
+        stop_loss_price = None    # Not used - trailing stop protects capital
+        trailing_trigger_price = entry_price + (atr * self.settings.trailing_trigger_atr_multiplier) if side == "long" else entry_price - (atr * self.settings.trailing_trigger_atr_multiplier)
 
-        if side == "long":
-            take_profit_price = entry_price + tp_distance
-            stop_loss_price = entry_price - sl_distance
-            trailing_trigger_price = entry_price + (atr * self.settings.trailing_trigger_atr_multiplier)
-        else:
-            take_profit_price = entry_price - tp_distance
-            stop_loss_price = entry_price + sl_distance
-            trailing_trigger_price = entry_price - (atr * self.settings.trailing_trigger_atr_multiplier)
-
-        # 8. Calculate actual risk amount
-        risk_per_unit = abs(entry_price - stop_loss_price)
+        # Calculate actual risk amount (based on trailing stop distance)
+        trailing_stop_distance = atr * self.settings.trailing_step_atr_multiplier
+        risk_per_unit = trailing_stop_distance
         position_units = (self.current_balance * adjusted_size_pct / 100) / entry_price
         risk_amount = position_units * risk_per_unit
         max_loss_pct = (risk_amount / self.current_balance) * 100
@@ -142,8 +136,8 @@ class RiskManager:
         return PositionSizeResult(
             base_size_pct=base_size_pct,
             adjusted_size_pct=round(adjusted_size_pct, 2),
-            take_profit_price=round(take_profit_price, 6),
-            stop_loss_price=round(stop_loss_price, 6),
+            take_profit_price=None,  # No fixed TP
+            stop_loss_price=None,    # No fixed SL
             trailing_trigger_price=round(trailing_trigger_price, 6),
             risk_amount=round(risk_amount, 2),
             max_loss_pct=round(max_loss_pct, 2),

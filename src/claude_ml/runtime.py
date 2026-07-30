@@ -589,16 +589,16 @@ class RuntimeEngine:
                         side=decision.side,
                     )
 
-                    logger.info(f"         TP: {risk_result.take_profit_price:.4f} | "
-                          f"SL: {risk_result.stop_loss_price:.4f} | "
-                          f"Risk: ${risk_result.risk_amount:.2f}")
+                    logger.info(f"         Trailing Stop Only (no fixed TP/SL)")
+                    logger.info(f"         Risk: ${risk_result.risk_amount:.2f}")
 
-                    # CREATE PAPER TRADE RECORD
+                    # CREATE PAPER TRADE RECORD (no fixed TP/SL - trailing stop only)
                     payload = {
                         "confidence": decision.confidence,
                         "regime": regime_name,
                         "atr_pct": atr_pct,
-                        "reasoning": decision.reasoning[:3]
+                        "reasoning": decision.reasoning[:3],
+                        "exit_strategy": "trailing_stop_only"
                     }
                     self.conn.execute("""
                         INSERT INTO paper_trades (
@@ -609,11 +609,11 @@ class RuntimeEngine:
                     """, (
                         symbol, decision.side, latest_ts.isoformat(), close_price,
                         'full', decision.confidence / 100,
-                        risk_result.take_profit_price, risk_result.stop_loss_price,
+                        None, None,  # No fixed TP/SL
                         json.dumps(payload)
                     ))
 
-                    logger.info(f"[{symbol}] Paper trade created")
+                    logger.info(f"[{symbol}] Paper trade created - trailing stop exit strategy")
 
                     # Create ATR-based trailing stop
                     trailing_state = create_trailing_stop(
