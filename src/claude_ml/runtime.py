@@ -615,17 +615,18 @@ class RuntimeEngine:
 
                     logger.info(f"[{symbol}] Paper trade created - trailing stop exit strategy")
 
-                    # Create ATR-based trailing stop
+                    # Create ATR-based trailing stop that activates AT TAKE PROFIT level
+                    tp_level = risk_result.take_profit_price if risk_result.take_profit_price else close_price + (atr * 2.5)
                     trailing_state = create_trailing_stop(
                         symbol=symbol,
                         side=decision.side,
                         entry_price=close_price,
                         atr=atr,
-                        trigger_mult=0.5,  # Activate after 0.5 ATR profit
-                        stop_mult=1.5,     # Stop at 1.5 ATR distance
+                        trigger_mult=(tp_level - close_price) / atr,  # Activate at TP level
+                        stop_mult=1.5,     # Stop at 1.5 ATR distance from max
                     )
                     self.trailing_stops[symbol] = trailing_state
-                    logger.info(f"         Trailing stop created: {trailing_state.current_stop_price:.4f}")
+                    logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f})")
 
                     # Send Telegram notification for entry
                     try:
