@@ -573,21 +573,18 @@ class RuntimeEngine:
                           f"Risk: ${risk_result.risk_amount:.2f}")
 
                     # CREATE PAPER TRADE RECORD
-                    trade_id = self.conn.execute("""
+                    self.conn.execute("""
                         INSERT INTO paper_trades (
-                            ts, symbol, side, entry_price, position_size_pct,
-                            confidence, take_profit_price, stop_loss_price,
-                            regime, reasoning, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
-                        RETURNING id
+                            symbol, side, entry_ts, entry_price, stage,
+                            signal_probability, take_profit_pct, stop_loss_pct, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
                     """, (
-                        latest_ts.isoformat(), symbol, decision.side, close_price,
-                        risk_result.adjusted_size_pct, decision.confidence / 100,
-                        risk_result.take_profit_price, risk_result.stop_loss_price,
-                        regime_name, '; '.join(decision.reasoning[:3])
-                    )).fetchone()[0]
+                        symbol, decision.side, latest_ts.isoformat(), close_price,
+                        'full', decision.confidence / 100,
+                        risk_result.take_profit_price, risk_result.stop_loss_price
+                    ))
 
-                    logger.info(f"[{symbol}] Paper trade created: id={trade_id}")
+                    logger.info(f"[{symbol}] Paper trade created")
 
                     # Create ATR-based trailing stop
                     trailing_state = create_trailing_stop(
