@@ -72,18 +72,23 @@ class TradingBot:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Get current balance from equity_curve (last entry)
-            cursor.execute("""
-                SELECT balance FROM equity_curve
-                ORDER BY id DESC LIMIT 1
-            """)
-            row = cursor.fetchone()
+            # Calculate REALIZED balance only (start balance + closed trades PnL)
+            cursor.execute("SELECT value FROM runtime_state WHERE key='paper_start_balance'")
+            start_row = cursor.fetchone()
+            start_balance = float(start_row[0]) if start_row and start_row[0] is not None else 10000.0
 
-            if row:
-                current_balance = row[0]
-            else:
-                # Get start balance
-                cursor.execute("SELECT value FROM runtime_state WHERE key='paper_start_balance'")
+            # Sum only CLOSED trades PnL (not open positions)
+            cursor.execute("""
+                SELECT SUM(pnl_pct) FROM paper_trades
+                WHERE status = 'closed'
+                  AND exit_ts IS NOT NULL
+                  AND ABS(pnl_pct) > 0.01
+            """)
+            pnl_row = cursor.fetchone()
+            realized_pnl_pct = float(pnl_row[0]) if pnl_row and pnl_row[0] is not None else 0.0
+
+            # Current balance = start + realized PnL only
+            current_balance = start_balance * (1 + realized_pnl_pct / 100)
                 row = cursor.fetchone()
                 start_balance = float(row[0]) if row else 10000.0
 
@@ -113,20 +118,24 @@ class TradingBot:
             total_pnl_row = cursor.fetchone()
             total_pnl = float(total_pnl_row[0]) if total_pnl_row and total_pnl_row[0] is not None else 0.0
 
-            # Get trade count
+            # Get REAL trade count (exclude trades with very small PnL - likely test/duplicate)
             cursor.execute("""
                 SELECT COUNT(*) FROM paper_trades
-                WHERE status IN ('closed', 'shadow_closed')
+                WHERE status = 'closed'
+                  AND exit_ts IS NOT NULL
+                  AND ABS(pnl_pct) > 0.01
             """)
             trade_count = int(cursor.fetchone()[0])
 
-            # Get win rate
+            # Get win rate for REAL trades only
             cursor.execute("""
                 SELECT
                     SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
                     COUNT(*) as total
                 FROM paper_trades
-                WHERE status IN ('closed', 'shadow_closed') AND pnl_pct IS NOT NULL
+                WHERE status = 'closed'
+                  AND exit_ts IS NOT NULL
+                  AND ABS(pnl_pct) > 0.01
             """)
             wr_row = cursor.fetchone()
             wins = int(wr_row[0]) if wr_row and wr_row[0] is not None else 0
