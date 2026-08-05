@@ -620,11 +620,11 @@ class RuntimeEngine:
                             symbol, side, entry_ts, entry_price, stage,
                             signal_probability, take_profit_pct, stop_loss_pct,
                             payload_json, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                        ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 0), COALESCE(?, 0), ?, 'open')
                     """, (
                         symbol, decision.side, latest_ts.isoformat(), close_price,
                         'full', decision.confidence / 100,
-                        None, None,  # No fixed TP/SL
+                        None, None,  # No fixed TP/SL - will use 0 as default
                         json.dumps(payload)
                     ))
 
