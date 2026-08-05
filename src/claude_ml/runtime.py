@@ -236,30 +236,8 @@ class RuntimeEngine:
             )
         """)
 
-        # Table for logging ALL decisions (including SKIP/WAIT)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS signal_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                close_price REAL NOT NULL,
-                atr_pct REAL NOT NULL,
-                regime TEXT NOT NULL,
-                early_probability REAL,
-                confirmation_probability REAL,
-                momentum_score REAL,
-                adaptive_early_threshold REAL,
-                adaptive_confirmation_threshold REAL,
-                adaptive_momentum_threshold REAL,
-                action TEXT NOT NULL,
-                action_reason TEXT,
-                confidence_pct REAL,
-                position_size_pct REAL,
-                features_json TEXT,
-                payload_json TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # Note: signal_audit_log table is created by SignalAuditEngine
+        # We use it to log ALL decisions (ENTER, SKIP, WAIT)
 
         self.conn.commit()
 
@@ -900,9 +878,8 @@ class RuntimeEngine:
                     ts, symbol, close_price, atr_pct, regime,
                     early_probability, confirmation_probability, momentum_score,
                     adaptive_early_threshold, adaptive_confirmation_threshold, adaptive_momentum_threshold,
-                    action, action_reason, confidence_pct, position_size_pct,
-                    features_json, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    action, action_reason, features_json, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
                 symbol,
@@ -917,10 +894,10 @@ class RuntimeEngine:
                 adaptive_momentum_thresh,
                 action,
                 reasoning,
-                confidence,
-                position_size_pct,
                 "{}",  # Empty features_json for now
                 json.dumps({
+                    "confidence_pct": confidence,
+                    "position_size_pct": position_size_pct,
                     "close_price": close_price,
                     "logged_at": datetime.now(timezone.utc).isoformat(),
                 })
