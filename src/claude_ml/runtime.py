@@ -600,6 +600,26 @@ class RuntimeEngine:
                     position_size_pct=decision.position_size_pct,
                     reasoning="; ".join(decision.reasoning[:3]) if decision.reasoning else "No signals",
                 )
+            else:
+                # Decision is None - log as SKIP with all scores at 0
+                logger.info(f"[{symbol}] SKIP | No ensemble decision (all models below thresholds)")
+                self._log_all_decisions(
+                    ts=latest_ts,
+                    symbol=symbol,
+                    close_price=close_price,
+                    atr_pct=atr_pct,
+                    regime=regime_name,
+                    early_prob=0,
+                    confirm_prob=0,
+                    momentum_score=0,
+                    adaptive_early_thresh=early_thresh,
+                    adaptive_confirm_thresh=confirm_thresh,
+                    adaptive_momentum_thresh=momentum_thresh,
+                    action="skip",
+                    confidence=0,
+                    position_size_pct=0,
+                    reasoning="Ensemble returned None - all models below thresholds",
+                )
 
                 # Calculate position size via risk manager
                 if decision.action.upper().startswith("ENTER"):
