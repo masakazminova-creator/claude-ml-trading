@@ -592,7 +592,7 @@ class RuntimeEngine:
                     regime=regime_name,
                     early_prob=decision.early_result.score if decision.early_result else 0,
                     confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
-                    momentum_score=decision.momentum_result.direction_value if decision.momentum_result else 0,
+                    momentum_score=decision.momentum_result.score if decision.momentum_result else 0,
                     adaptive_early_thresh=early_thresh,
                     adaptive_confirm_thresh=confirm_thresh,
                     adaptive_momentum_thresh=momentum_thresh,
