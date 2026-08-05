@@ -582,6 +582,25 @@ class RuntimeEngine:
                       f"Confidence: {decision.confidence:.0f}% | Size: {decision.position_size_pct*100:.0f}%")
                 print(f"         Reasoning: {'; '.join(decision.reasoning[:3])}")
 
+                # Log ALL decisions to signal_audit table (including SKIP/WAIT)
+                self._log_all_decisions(
+                    ts=latest_ts,
+                    symbol=symbol,
+                    close_price=close_price,
+                    atr_pct=atr_pct,
+                    regime=regime_name,
+                    early_prob=decision.early_result.score if decision.early_result else 0,
+                    confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
+                    momentum_score=decision.momentum_result.direction_value if decision.momentum_result else 0,
+                    adaptive_early_thresh=early_thresh,
+                    adaptive_confirm_thresh=confirm_thresh,
+                    adaptive_momentum_thresh=momentum_thresh,
+                    action=decision.action.lower(),
+                    confidence=decision.confidence,
+                    position_size_pct=decision.position_size_pct,
+                    reasoning="; ".join(decision.reasoning[:3]) if decision.reasoning else "No signals",
+                )
+
                 # Calculate position size via risk manager
                 if decision.action.upper().startswith("ENTER"):
                     # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
@@ -672,7 +691,7 @@ class RuntimeEngine:
                     except Exception as e:
                         logger.warning(f"Failed to send Telegram entry notification: {e}")
 
-                    # Log decision
+                    # Log decision (original method)
                     self._log_decision(
                         ts=latest_ts,
                         symbol=symbol,
@@ -690,44 +709,6 @@ class RuntimeEngine:
                         regime=regime_name,
                         decision=decision,
                         featured=featured,
-                    )
-
-                    # Log ALL decisions to signal_audit table (including ENTER)
-                    self._log_all_decisions(
-                        ts=latest_ts,
-                        symbol=symbol,
-                        close_price=close_price,
-                        atr_pct=atr_pct,
-                        regime=regime_name,
-                        early_prob=decision.early_result.score if decision.early_result else 0,
-                        confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
-                        momentum_score=decision.momentum_result.direction_value if decision.momentum_result else 0,
-                        adaptive_early_thresh=early_thresh,
-                        adaptive_confirm_thresh=confirm_thresh,
-                        adaptive_momentum_thresh=momentum_thresh,
-                        action=decision.action.lower(),
-                        confidence=decision.confidence,
-                        position_size_pct=decision.position_size_pct,
-                        reasoning="; ".join(decision.reasoning[:3]),
-                    )
-                else:
-                    # SKIP or WAIT decision - log for analysis
-                    self._log_all_decisions(
-                        ts=latest_ts,
-                        symbol=symbol,
-                        close_price=close_price,
-                        atr_pct=atr_pct,
-                        regime=regime_name,
-                        early_prob=decision.early_result.score if decision.early_result else 0,
-                        confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
-                        momentum_score=decision.momentum_result.direction_value if decision.momentum_result else 0,
-                        adaptive_early_thresh=early_thresh,
-                        adaptive_confirm_thresh=confirm_thresh,
-                        adaptive_momentum_thresh=momentum_thresh,
-                        action=decision.action.lower(),
-                        confidence=decision.confidence,
-                        position_size_pct=0,
-                        reasoning="; ".join(decision.reasoning[:3]) if decision.reasoning else "No signals",
                     )
 
         else:
