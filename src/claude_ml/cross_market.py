@@ -398,7 +398,7 @@ class CrossMarketAnalyzer:
         else:
             features['crypto_strength_signal'] = False
 
-        if data.spx_btc_correlation and abs(data.spx_btc_correlation) > 0.5:
+        if data.spx_correlation_with_btc and abs(data.spx_correlation_with_btc) > 0.5:
             features['risk_on_off_relevant'] = True
         else:
             features['risk_on_off_relevant'] = False
