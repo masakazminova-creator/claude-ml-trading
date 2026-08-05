@@ -26,6 +26,7 @@ import pandas as pd
 from .models.early_signal import EarlySignalModel, EarlySignalResult
 from .models.confirmation import ConfirmationModel, ConfirmationResult
 from .models.momentum import MomentumModel, MomentumResult
+from .cross_market import get_cross_market_features
 
 
 @dataclass(slots=True)
@@ -57,6 +58,15 @@ class MarketContext:
     # Buyer/Seller pressure
     dominant_side: str  # 'buyers', 'sellers', 'balanced'
     pressure_strength: float  # 0-1
+
+    # Cross-market context (NEW)
+    dxy_trend: Optional[str] = None  # 'rising', 'falling', 'neutral'
+    dxy_change_pct: Optional[float] = None
+    eth_btc_ratio: Optional[float] = None
+    eth_leading: Optional[bool] = None
+    spx_correlation: Optional[float] = None
+    risk_on_off_signal: Optional[str] = None  # 'risk_on', 'risk_off', 'neutral'
+    cross_market_data_quality: float = 0.0  # 0-1 quality of cross-market data
 
     # Computed metrics
     overall_clarity: float  # 0-1 how clear is the market picture
@@ -242,6 +252,45 @@ class ContextAnalyzer:
         elif tf60_rsi < 45:
             bias_score -= 0.15
 
+        # === CROSS-MARKET ANALYSIS (NEW) ===
+        # Fetch and analyze inter-market correlations
+        try:
+            cross_market_data = get_cross_market_features(row)
+
+            dxy_trend = cross_market_data.get('dxy_trend')
+            dxy_change_pct = cross_market_data.get('dxy_change_pct')
+            eth_btc_ratio = cross_market_data.get('eth_btc_ratio')
+            eth_leading = cross_market_data.get('eth_leading')
+            spx_correlation = cross_market_data.get('spx_btc_correlation')
+            cross_market_quality = cross_market_data.get('data_quality', 0.0)
+
+            # Apply cross-market biases
+            if dxy_trend == "falling" and dxy_change_pct and dxy_change_pct < -0.2:
+                bias_score += 0.15  # DXY falling is bullish for BTC
+            elif dxy_trend == "rising" and dxy_change_pct and dxy_change_pct > 0.2:
+                bias_score -= 0.15  # DXY rising is bearish for BTC
+
+            if eth_leading and eth_btc_ratio and eth_btc_ratio > 0:
+                bias_score += 0.1  # ETH leading with positive momentum
+            elif eth_leading and eth_btc_ratio and eth_btc_ratio < 0:
+                bias_score -= 0.1  # ETH leading downward
+
+            if spx_correlation and abs(spx_correlation) > 0.5:
+                # High correlation means risk-on/off matters
+                if spx_correlation > 0.5:
+                    bias_score += 0.1  # Positive correlation with stocks
+                else:
+                    bias_score -= 0.05  # Negative correlation (rare)
+
+        except Exception as e:
+            logger.warning(f"Cross-market analysis failed: {e}")
+            dxy_trend = None
+            dxy_change_pct = None
+            eth_btc_ratio = None
+            eth_leading = None
+            spx_correlation = None
+            cross_market_quality = 0.0
+
         if bias_score > 0.15:
             directional_bias = "long_preferred"
         elif bias_score < -0.15:
@@ -296,6 +345,13 @@ class ContextAnalyzer:
             momentum_confluence=momentum_confluence,
             dominant_side=dominant_side,
             pressure_strength=pressure_strength,
+            dxy_trend=dxy_trend,
+            dxy_change_pct=dxy_change_pct,
+            eth_btc_ratio=eth_btc_ratio,
+            eth_leading=eth_leading,
+            spx_correlation=spx_correlation,
+            risk_on_off_signal="risk_on" if spx_correlation and spx_correlation > 0.5 else "risk_off" if spx_correlation and spx_correlation < -0.3 else "neutral",
+            cross_market_data_quality=cross_market_quality,
             overall_clarity=overall_clarity,
             directional_bias=directional_bias,
             required_confidence=required_confidence
