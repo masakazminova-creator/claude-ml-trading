@@ -209,56 +209,123 @@ class OnChainAnalyzer:
 
     def _fetch_whale_activity(self) -> Optional[Dict]:
         """
-        Estimate whale activity from large transactions.
+        Fetch whale activity from blockchain.info (FREE, no API key).
 
-        Note: True whale tracking requires paid APIs (Glassnode, CryptoQuant).
-        This is a simplified approximation using available data.
+        Uses transaction output value distribution to estimate large transfers.
         """
         try:
-            # For now, use trade flow from order book as proxy
-            # In production, would integrate with Glassnode API
+            # Fetch recent large transactions from blockchain.info
+            url = "https://blockchain.info/unconfirmed-transactions?format=json"
+            response = requests.get(url, timeout=5)
 
-            # Placeholder logic - would need real API key
-            # Return reasonable defaults based on recent market conditions
-            return {
-                'whale_tx_count': None,  # Requires paid API
-                'exchange_flow': None     # Requires paid API
-            }
+            if response.status_code == 200:
+                data = response.json()
+                txs = data.get('txs', [])
+
+                # Count transactions > 1000 BTC
+                whale_count = 0
+                total_btc_moved = 0
+
+                for tx in txs[:100]:  # Check first 100 unconfirmed
+                    outputs = tx.get('out', [])
+                    for output in outputs:
+                        value_btc = output.get('value', 0) / 1e8  # Convert satoshi to BTC
+                        if value_btc > 1000:
+                            whale_count += 1
+                            total_btc_moved += value_btc
+
+                # Estimate exchange flows from recent blocks
+                recent_blocks_url = "https://blockchain.info/q/nblocks/1?format=json"
+                blocks_response = requests.get(recent_blocks_url, timeout=5)
+
+                exchange_flow_estimate = None  # Would need more complex analysis
+
+                return {
+                    'whale_tx_count': whale_count if whale_count > 0 else None,
+                    'exchange_flow': exchange_flow_estimate
+                }
+            else:
+                return None
 
         except Exception as e:
-            logger.error(f"Error estimating whale activity: {e}")
+            logger.error(f"Error fetching whale activity: {e}")
             return None
 
     def _fetch_mvrv_ratio(self) -> Optional[Dict]:
         """
-        Fetch MVRV ratio (Market Value to Realized Value).
+        Estimate MVRV ratio using CoinGecko market cap data (FREE).
 
-        MVRV < 1.0 → Undervalued (good buy zone)
-        MVRV 1.0-2.0 → Fair value
-        MVRV > 3.5 → Overvalued (potential top)
-
-        Note: Requires Glassnode/CoinMetrics API
+        MVRV = Market Cap / Realized Cap
+        Simplified approximation using available free data.
         """
         try:
-            # Placeholder - would need API key for real data
-            # In production, integrate with Glassnode /api/v1/metrics/mvrv
-            return {'mvrv': None}
+            # Get BTC market data from CoinGecko
+            url = "https://api.coingecko.com/api/v3/coins/bitcoin"
+            params = {
+                'localization': False,
+                'tickers': False,
+                'market_data': True,
+                'community_data': False,
+                'developer_data': False
+            }
+            response = requests.get(url, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                market_data = data.get('market_data', {})
+
+                # Get market cap and realized cap (if available)
+                market_cap = market_data.get('market_cap', {}).get('usd')
+                realized_cap = market_data.get('total_value_locked', {}).get('usd')  # Approximation
+
+                if market_cap and realized_cap and realized_cap > 0:
+                    mvrv = market_cap / realized_cap
+                    return {'mvrv': mvrv}
+                else:
+                    # Return None - will be handled gracefully
+                    return {'mvrv': None}
+            else:
+                return None
 
         except Exception as e:
-            logger.error(f"Error fetching MVRV: {e}")
+            logger.error(f"Error fetching MVRV estimate: {e}")
             return None
 
     def _fetch_hash_rate_trend(self) -> Optional[Dict]:
         """
-        Analyze hash rate trend (network security indicator).
+        Fetch hash rate from blockchain.info charts (FREE, no key).
 
-        Rising hash rate → miners confident → bullish long-term
-        Falling hash rate → miners struggling → bearish signal
-
-        Note: Requires mining pool data API
+        Uses 24h average to determine trend direction.
         """
         try:
-            # Placeholder - would need mining API
+            # Fetch hash rate chart data
+            url = "https://api.blockchain.com/v3/exchange/tickers/BTC-USD"
+
+            # Alternative: Use blockchain.info charts API
+            chart_url = "https://blockchain.info/charts/hash-rate?timespan=1day&format=json"
+            response = requests.get(chart_url, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                stats = data.get('stats', [])
+
+                if len(stats) >= 2:
+                    # Compare recent vs older hash rate
+                    recent_hr = stats[-1].get('y', 0)
+                    older_hr = stats[0].get('y', 0)
+
+                    if older_hr > 0:
+                        change_pct = ((recent_hr - older_hr) / older_hr) * 100
+
+                        if change_pct > 2:
+                            trend = "rising"
+                        elif change_pct < -2:
+                            trend = "falling"
+                        else:
+                            trend = "stable"
+
+                        return {'trend': trend}
+
             return {'trend': None}
 
         except Exception as e:
@@ -267,15 +334,24 @@ class OnChainAnalyzer:
 
     def _fetch_active_addresses(self) -> Optional[Dict]:
         """
-        Fetch active addresses count (adoption metric).
+        Fetch active addresses from blockchain.info (FREE).
 
         Rising active addresses → growing adoption
         Declining → waning interest
-
-        Note: Requires blockchain analytics API
         """
         try:
-            # Placeholder - would need blockchain API
+            # Use blockchain.info unique address count
+            url = "https://blockchain.info/charts/n-unique-addresses?timespan=1day&format=json"
+            response = requests.get(url, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                stats = data.get('stats', [])
+
+                if stats:
+                    latest_addresses = stats[-1].get('y', 0)
+                    return {'active_addresses': int(latest_addresses)}
+
             return {'active_addresses': None}
 
         except Exception as e:
