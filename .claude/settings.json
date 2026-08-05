@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@95.81.101.148*)",
+      "Bash(docker-compose*)",
+      "Bash(docker exec claude-ml-bot*)",
+      "Bash(git add . && git commit*)",
+      "Bash(git push origin main)",
+      "Bash(cd /opt/claude-ml-trading*)"
+    ]
+  },
+  "hooks": {
+    "PreCommand": [
+      {
+        "regex": "^git (add|commit|push)",
+        "command": "cd \"C:\\Bot\\claude_ml_system\" && git status"
+      }
+    ],
+    "PostCommand": [
+      {
+        "regex": "^git commit.*Claude ML",
+        "command": "echo '💡 Tip: Run `git push` to deploy or `/deploy` skill for full deployment'"
+      }
+    ],
+    "OnSessionStart": [
+      {
+        "command": "cd \"C:\\Bot\\claude_ml_system\" && echo '🤖 Claude ML Trading System ready' && echo 'Server: root@95.81.101.148 | Status: Active' && echo 'Use /deploy, /analyze-signals, /monitor-decisions, /check-models'"
+      }
+    ]
+  },
+  "env": {
+    "CLAUDE_ML_SERVER": "root@95.81.101.148",
+    "CLAUDE_ML_PATH": "/opt/claude-ml-trading",
+    "CLAUDE_ML_LOCAL_PATH": "C:\\Bot\\claude_ml_system"
+  }
+}
