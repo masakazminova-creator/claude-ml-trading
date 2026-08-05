@@ -400,6 +400,7 @@ class RuntimeEngine:
 
     def _process_symbol(self, symbol: str) -> None:
         """Process single symbol: fetch data, build features, run ensemble."""
+        logger.info(f"=== Processing {symbol} ===")
         logger.debug(f"Processing {symbol}...")
 
         try:
@@ -621,115 +622,115 @@ class RuntimeEngine:
                     reasoning="Ensemble returned None - all models below thresholds",
                 )
 
-                # Calculate position size via risk manager
-                if decision.action.upper().startswith("ENTER"):
-                    # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
-                    existing_position = self.conn.execute("""
-                        SELECT id FROM paper_trades
-                        WHERE symbol = ? AND status = 'open'
-                        ORDER BY id DESC LIMIT 1
-                    """, (symbol,)).fetchone()
+        # Calculate position size via risk manager (for ENTER decisions only)
+        if decision and decision.action.upper().startswith("ENTER"):
+            # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
+            existing_position = self.conn.execute("""
+                SELECT id FROM paper_trades
+                WHERE symbol = ? AND status = 'open'
+                ORDER BY id DESC LIMIT 1
+            """, (symbol,)).fetchone()
 
-                    if existing_position:
-                        logger.info(f"[{symbol}] ⏸️ Position already open (id={existing_position[0]}), skipping duplicate signal")
-                        return  # Skip this cycle - already in position
+            if existing_position:
+                logger.info(f"[{symbol}] ⏸️ Position already open (id={existing_position[0]}), skipping duplicate signal")
+                return  # Skip this cycle - already in position
 
-                    risk_result = self.risk_manager.calculate_position_size(
-                        symbol=symbol,
-                        entry_price=close_price,
-                        atr=atr,
-                        regime=regime_name,
-                        model_confidence=decision.confidence / 100,
-                        side=decision.side,
-                    )
+            risk_result = self.risk_manager.calculate_position_size(
+                symbol=symbol,
+                entry_price=close_price,
+                atr=atr,
+                regime=regime_name,
+                model_confidence=decision.confidence / 100,
+                side=decision.side,
+            )
 
-                    logger.info(f"         Emergency SL: {risk_result.stop_loss_price:.4f} | Trailing Stop Active")
-                    logger.info(f"         Risk: ${risk_result.risk_amount:.2f}")
+            logger.info(f"         Emergency SL: {risk_result.stop_loss_price:.4f} | Trailing Stop Active")
+            logger.info(f"         Risk: ${risk_result.risk_amount:.2f}")
 
-                    # CREATE PAPER TRADE RECORD (no fixed TP/SL - trailing stop only)
-                    payload = {
-                        "confidence": decision.confidence,
-                        "regime": regime_name,
-                        "atr_pct": atr_pct,
-                        "reasoning": decision.reasoning[:3],
-                        "exit_strategy": "trailing_stop_only"
-                    }
-                    self.conn.execute("""
-                        INSERT INTO paper_trades (
-                            symbol, side, entry_ts, entry_price, stage,
-                            signal_probability, take_profit_pct, stop_loss_pct,
-                            payload_json, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 0), COALESCE(?, 0), ?, 'open')
-                    """, (
-                        symbol, decision.side, latest_ts.isoformat(), close_price,
-                        'full', decision.confidence / 100,
-                        None, None,  # No fixed TP/SL - will use 0 as default
-                        json.dumps(payload)
-                    ))
+            # CREATE PAPER TRADE RECORD (no fixed TP/SL - trailing stop only)
+            payload = {
+                "confidence": decision.confidence,
+                "regime": regime_name,
+                "atr_pct": atr_pct,
+                "reasoning": decision.reasoning[:3],
+                "exit_strategy": "trailing_stop_only"
+            }
+            self.conn.execute("""
+                INSERT INTO paper_trades (
+                    symbol, side, entry_ts, entry_price, stage,
+                    signal_probability, take_profit_pct, stop_loss_pct,
+                    payload_json, status
+                ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, 0), COALESCE(?, 0), ?, 'open')
+            """, (
+                symbol, decision.side, latest_ts.isoformat(), close_price,
+                'full', decision.confidence / 100,
+                None, None,  # No fixed TP/SL - will use 0 as default
+                json.dumps(payload)
+            ))
 
-                    logger.info(f"[{symbol}] Paper trade created - trailing stop exit strategy")
+            logger.info(f"[{symbol}] Paper trade created - trailing stop exit strategy")
 
-                    # Create ATR-based trailing stop that activates AT TAKE PROFIT level
-                    tp_level = risk_result.take_profit_price if risk_result.take_profit_price else close_price + (atr * 2.5)
-                    trailing_state = create_trailing_stop(
-                        symbol=symbol,
-                        side=decision.side,
-                        entry_price=close_price,
-                        atr=atr,
-                        trigger_mult=(tp_level - close_price) / atr,  # Activate at TP level
-                        stop_mult=1.5,     # Stop at 1.5 ATR distance from max
-                    )
-                    self.trailing_stops[symbol] = trailing_state
-                    logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f})")
+            # Create ATR-based trailing stop that activates AT TAKE PROFIT level
+            tp_level = risk_result.take_profit_price if risk_result.take_profit_price else close_price + (atr * 2.5)
+            trailing_state = create_trailing_stop(
+                symbol=symbol,
+                side=decision.side,
+                entry_price=close_price,
+                atr=atr,
+                trigger_mult=(tp_level - close_price) / atr,  # Activate at TP level
+                stop_mult=1.5,     # Stop at 1.5 ATR distance from max
+            )
+            self.trailing_stops[symbol] = trailing_state
+            logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f})")
 
-                    # Send Telegram notification for entry
-                    try:
-                        entry_msg = (
-                            f"🔔 *NEW TRADE ENTRY*\n\n"
-                            f"Symbol: `{symbol}`\n"
-                            f"Side: *{decision.side.upper()}*\n"
-                            f"Entry Price: `${close_price:.2f}`\n"
-                            f"Confidence: `{decision.confidence:.0f}%`\n"
-                            f"Position Size: `{risk_result.adjusted_size_pct:.1f}%`\n\n"
-                            f"Take Profit: `${risk_result.take_profit_price:.2f}`\n"
-                            f"Stop Loss: `${risk_result.stop_loss_price:.2f}`\n"
-                            f"Trailing Stop: `${trailing_state.current_stop_price:.2f}`\n\n"
-                            f"Regime: `{regime_name}`\n"
-                            f"Reasoning: {'; '.join(decision.reasoning[:3])}"
-                        )
-                        url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
-                        data = {
-                            "chat_id": self.settings.telegram_chat_id,
-                            "text": entry_msg,
-                            "parse_mode": "Markdown"
-                        }
-                        response = requests.post(url, json=data, timeout=10)
-                        if response.status_code == 200:
-                            logger.info("Telegram entry notification sent")
-                        else:
-                            logger.warning(f"Telegram API error: {response.text}")
-                    except Exception as e:
-                        logger.warning(f"Failed to send Telegram entry notification: {e}")
+            # Send Telegram notification for entry
+            try:
+                entry_msg = (
+                    f"🔔 *NEW TRADE ENTRY*\n\n"
+                    f"Symbol: `{symbol}`\n"
+                    f"Side: *{decision.side.upper()}*\n"
+                    f"Entry Price: `${close_price:.2f}`\n"
+                    f"Confidence: `{decision.confidence:.0f}%`\n"
+                    f"Position Size: `{risk_result.adjusted_size_pct:.1f}%`\n\n"
+                    f"Take Profit: `${risk_result.take_profit_price:.2f}`\n"
+                    f"Stop Loss: `${risk_result.stop_loss_price:.2f}`\n"
+                    f"Trailing Stop: `${trailing_state.current_stop_price:.2f}`\n\n"
+                    f"Regime: `{regime_name}`\n"
+                    f"Reasoning: {'; '.join(decision.reasoning[:3])}"
+                )
+                url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
+                data = {
+                    "chat_id": self.settings.telegram_chat_id,
+                    "text": entry_msg,
+                    "parse_mode": "Markdown"
+                }
+                response = requests.post(url, json=data, timeout=10)
+                if response.status_code == 200:
+                    logger.info("Telegram entry notification sent")
+                else:
+                    logger.warning(f"Telegram API error: {response.text}")
+            except Exception as e:
+                logger.warning(f"Failed to send Telegram entry notification: {e}")
 
-                    # Log decision (original method)
-                    self._log_decision(
-                        ts=latest_ts,
-                        symbol=symbol,
-                        decision=decision,
-                        regime=regime_name,
-                        risk_result=risk_result,
-                    )
+            # Log decision (original method)
+            self._log_decision(
+                ts=latest_ts,
+                symbol=symbol,
+                decision=decision,
+                regime=regime_name,
+                risk_result=risk_result,
+            )
 
-                    # Audit log with full context
-                    self._audit_log_decision(
-                        ts=latest_ts,
-                        symbol=symbol,
-                        close_price=close_price,
-                        atr_pct=atr_pct * 100 / close_price if close_price > 0 else 0.5,
-                        regime=regime_name,
-                        decision=decision,
-                        featured=featured,
-                    )
+            # Audit log with full context
+            self._audit_log_decision(
+                ts=latest_ts,
+                symbol=symbol,
+                close_price=close_price,
+                atr_pct=atr_pct * 100 / close_price if close_price > 0 else 0.5,
+                regime=regime_name,
+                decision=decision,
+                featured=featured,
+            )
 
         else:
             # Data-only mode
