@@ -1,27 +1,25 @@
 """
-Multi-Model Ensemble - Combines Early Signal, Confirmation, and Momentum models.
+Context-Aware Multi-Model Ensemble - Adaptive decision making based on market context.
 
-Ensemble logic:
-1. Early Signal Model detects pre-breakout setup (threshold 0.62)
-2. Confirmation Model validates with calibrated probability (threshold 0.75)
-3. Momentum Model checks short-term direction (threshold 0.55)
+Key improvements over original:
+1. Market context analysis before signal evaluation
+2. Adaptive thresholds based on regime and market state
+3. Balanced long/short evaluation with contextual bias
+4. Dynamic position sizing based on conviction level
+5. Explainable reasoning with market structure awareness
 
-Decision matrix:
-- All 3 agree → Full position (100% size)
-- Early + Confirm agree → Reduced position (70% size)
-- Early + Momentum agree → Small position (40% size)
-- Only Early signals → Watch list (no entry)
-- Any disagrees → Skip
-
-Two-Stage Entry:
-- Stage 1 (Early): 30-50% size when early signal detected
-- Stage 2 (Confirmation): Add 50-70% when confirmed
+Decision framework:
+- Analyze market context (trend, volatility, liquidity, structure)
+- Evaluate signals with adaptive thresholds
+- Determine side based on contextual evidence, not just scores
+- Size positions based on conviction (context quality * signal strength)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+import math
 
 import pandas as pd
 
@@ -31,10 +29,46 @@ from .models.momentum import MomentumModel, MomentumResult
 
 
 @dataclass(slots=True)
+class MarketContext:
+    """Comprehensive market state analysis."""
+    # Trend analysis
+    higher_tf_trend: str  # 'bullish', 'bearish', 'neutral'
+    trend_strength: float  # 0-1 composite strength
+    trend_quality: str  # 'impulsive', 'corrective', 'developing'
+
+    # Volatility analysis
+    vol_percentile: float  # Current vol vs historical (0-100)
+    vol_regime: str  # 'low', 'normal', 'high', 'extreme'
+    vol_trend: str  # 'expanding', 'contracting', 'stable'
+
+    # Market structure
+    structure_type: str  # 'HH_HL' (uptrend), 'LH_LL' (downtrend), 'range'
+    structure_strength: float  # How clear is the structure
+    key_level_proximity: str  # 'at_support', 'at_resistance', 'in_no_mans_land'
+
+    # Liquidity analysis
+    liquidity_condition: str  # 'thick', 'normal', 'thin'
+    liquidity_trend: str  # 'improving', 'deteriorating', 'stable'
+
+    # Momentum context
+    momentum_alignment: dict  # {5m: direction, 15m: direction, 1h: direction}
+    momentum_confluence: bool  # Are multiple timeframes aligned?
+
+    # Buyer/Seller pressure
+    dominant_side: str  # 'buyers', 'sellers', 'balanced'
+    pressure_strength: float  # 0-1
+
+    # Computed metrics
+    overall_clarity: float  # 0-1 how clear is the market picture
+    directional_bias: str  # 'long_preferred', 'short_preferred', 'neutral'
+    required_confidence: float  # Minimum confidence to enter based on context
+
+
+@dataclass(slots=True)
 class EnsembleDecision:
-    """Final decision from ensemble."""
+    """Final decision from ensemble with context awareness."""
     action: str  # 'enter_full', 'enter_reduced', 'enter_small', 'stage_1', 'stage_2', 'wait', 'skip'
-    side: str
+    side: str  # 'long' or 'short'
     confidence: float  # 0-100
     score: float  # Combined score
     early_result: Optional[EarlySignalResult] = None
@@ -42,10 +76,234 @@ class EnsembleDecision:
     momentum_result: Optional[MomentumResult] = None
     position_size_pct: float = 1.0  # Multiplier (1.0 = 100%)
     reasoning: List[str] = None
+    market_context: Optional[MarketContext] = None  # NEW: context that led to decision
+    conviction_level: str = "low"  # NEW: low/medium/high based on context + signal
+
+
+class ContextAnalyzer:
+    """Analyzes market context for adaptive decision making."""
+
+    @staticmethod
+    def analyze(row: pd.Series, regime_info: Optional[dict] = None) -> MarketContext:
+        """
+        Comprehensive market context analysis.
+
+        This replaces simple regime detection with multi-dimensional analysis.
+        """
+        # Extract key metrics from features
+        ema_8_vs_21 = float(row.get("ema_8_vs_21", 0.0) or 0.0)
+        ema_slope_8 = float(row.get("ema_slope_8", 0.0) or 0.0)
+        atr_pct = float(row.get("atr_pct_14", 0.005) or 0.005)
+        rsi = float(row.get("rsi_14", 50.0) or 50.0)
+        close_position = float(row.get("bar_close_position", 0.5) or 0.5)
+        volume_zscore = float(row.get("vol_zscore", 0.0) or 0.0)
+        ob_imbalance = float(row.get("ob_imbalance_top_10", 0.0) or 0.0)
+        trade_flow = float(row.get("trade_flow_imbalance", 0.0) or 0.0)
+
+        # Higher timeframe trend (using 60m features if available)
+        tf60_rsi = float(row.get("tf60_rsi_14", 50.0) or 50.0)
+        tf60_ret_3 = float(row.get("tf60_ret_3", 0.0) or 0.0)
+
+        # === TREND ANALYSIS ===
+        # Composite trend strength from multiple indicators
+        trend_components = []
+        if abs(ema_8_vs_21) > 0.002:
+            trend_components.append(min(abs(ema_8_vs_21) / 0.005, 1.0))
+        if abs(ema_slope_8) > 0.0005:
+            trend_components.append(min(abs(ema_slope_8) / 0.001, 1.0))
+
+        trend_strength = sum(trend_components) / len(trend_components) if trend_components else 0.2
+
+        # Determine trend direction
+        if ema_8_vs_21 > 0.003 and ema_slope_8 > 0:
+            higher_tf_trend = "bullish"
+        elif ema_8_vs_21 < -0.003 and ema_slope_8 < 0:
+            higher_tf_trend = "bearish"
+        else:
+            higher_tf_trend = "neutral"
+
+        # Trend quality (impulsive vs corrective)
+        if abs(ema_8_vs_21) > 0.005 and volume_zscore > 0.5:
+            trend_quality = "impulsive"
+        elif abs(ema_8_vs_21) > 0.002:
+            trend_quality = "corrective"
+        else:
+            trend_quality = "developing"
+
+        # === VOLATILITY ANALYSIS ===
+        # ATR percentile approximation (would be better with historical data)
+        vol_percentile = min(max(atr_pct * 10000, 0), 100)  # Rough approximation
+
+        if atr_pct < 0.003:
+            vol_regime = "low"
+        elif atr_pct < 0.008:
+            vol_regime = "normal"
+        elif atr_pct < 0.015:
+            vol_regime = "high"
+        else:
+            vol_regime = "extreme"
+
+        # Volatility trend (would need historical ATR data)
+        vol_trend = "stable"  # Placeholder
+
+        # === MARKET STRUCTURE ===
+        # Using RSI and close position to infer structure
+        if rsi > 60 and close_position > 0.7:
+            structure_type = "HH_HL"  # Uptrend structure
+            structure_strength = min((rsi - 50) / 20, 1.0) * close_position
+        elif rsi < 40 and close_position < 0.3:
+            structure_type = "LH_LL"  # Downtrend structure
+            structure_strength = min((50 - rsi) / 20, 1.0) * (1 - close_position)
+        else:
+            structure_type = "range"
+            structure_strength = 1.0 - abs(rsi - 50) / 25
+
+        # Key level proximity (simplified - would be better with S/R levels)
+        if close_position > 0.8:
+            key_level_proximity = "at_resistance"
+        elif close_position < 0.2:
+            key_level_proximity = "at_support"
+        else:
+            key_level_proximity = "in_no_mans_land"
+
+        # === LIQUIDITY ANALYSIS ===
+        spread_bps = float(row.get("ob_spread_bps", 5.0) or 5.0)
+
+        if spread_bps < 3:
+            liquidity_condition = "thick"
+        elif spread_bps < 8:
+            liquidity_condition = "normal"
+        else:
+            liquidity_condition = "thin"
+
+        liquidity_trend = "stable"  # Placeholder
+
+        # === MOMENTUM CONTEXT ===
+        # Multi-timeframe alignment
+        short_momentum = "bullish" if rsi > 55 else "bearish" if rsi < 45 else "neutral"
+        medium_momentum = "bullish" if tf60_rsi > 55 else "bearish" if tf60_rsi < 45 else "neutral"
+
+        momentum_alignment = {
+            "5m": short_momentum,
+            "15m": medium_momentum,
+            "1h": "bullish" if tf60_ret_3 > 0 else "bearish"
+        }
+
+        # Check if timeframes align
+        directions = [d for d in momentum_alignment.values() if d != "neutral"]
+        momentum_confluence = len(set(directions)) == 1 and len(directions) >= 2
+
+        # === BUYER/SELLER PRESSURE ===
+        # Combine order book and trade flow
+        ob_pressure = ob_imbalance
+        flow_pressure = trade_flow
+        pressure_score = (ob_pressure + flow_pressure) / 2
+
+        if pressure_score > 0.05:
+            dominant_side = "buyers"
+        elif pressure_score < -0.05:
+            dominant_side = "sellers"
+        else:
+            dominant_side = "balanced"
+
+        pressure_strength = min(abs(pressure_score) * 10, 1.0)
+
+        # === OVERALL CLARITY ===
+        # How clear is the market picture?
+        clarity_factors = [
+            trend_strength,
+            structure_strength,
+            pressure_strength,
+            1.0 if momentum_confluence else 0.3,
+            1.0 if vol_regime in ["normal", "high"] else 0.5
+        ]
+        overall_clarity = sum(clarity_factors) / len(clarity_factors)
+
+        # === DIRECTIONAL BIAS ===
+        # Based on all factors, which side is preferred?
+        bias_score = 0.0
+        if higher_tf_trend == "bullish":
+            bias_score += 0.3
+        elif higher_tf_trend == "bearish":
+            bias_score -= 0.3
+
+        if structure_type == "HH_HL":
+            bias_score += 0.2
+        elif structure_type == "LH_LL":
+            bias_score -= 0.2
+
+        if dominant_side == "buyers":
+            bias_score += 0.2
+        elif dominant_side == "sellers":
+            bias_score -= 0.2
+
+        if tf60_rsi > 55:
+            bias_score += 0.15
+        elif tf60_rsi < 45:
+            bias_score -= 0.15
+
+        if bias_score > 0.15:
+            directional_bias = "long_preferred"
+        elif bias_score < -0.15:
+            directional_bias = "short_preferred"
+        else:
+            directional_bias = "neutral"
+
+        # === REQUIRED CONFIDENCE ===
+        # Adaptive threshold based on context clarity
+        base_confidence = 0.70
+
+        # Adjust based on clarity (clearer markets need lower confidence)
+        if overall_clarity > 0.7:
+            clarity_adjustment = -0.05
+        elif overall_clarity < 0.4:
+            clarity_adjustment = +0.10
+        else:
+            clarity_adjustment = 0.0
+
+        # Adjust based on volatility (higher vol needs higher confidence)
+        if vol_regime == "high":
+            vol_adjustment = +0.05
+        elif vol_regime == "low":
+            vol_adjustment = -0.03
+        else:
+            vol_adjustment = 0.0
+
+        # Adjust based on key level proximity
+        if key_level_proximity == "at_resistance" and directional_bias == "long_preferred":
+            level_adjustment = +0.05  # Risky to go long at resistance
+        elif key_level_proximity == "at_support" and directional_bias == "short_preferred":
+            level_adjustment = +0.05  # Risky to short at support
+        else:
+            level_adjustment = 0.0
+
+        required_confidence = base_confidence + clarity_adjustment + vol_adjustment + level_adjustment
+        required_confidence = max(min(required_confidence, 0.90), 0.60)  # Clamp between 60-90%
+
+        return MarketContext(
+            higher_tf_trend=higher_tf_trend,
+            trend_strength=trend_strength,
+            trend_quality=trend_quality,
+            vol_percentile=vol_percentile,
+            vol_regime=vol_regime,
+            vol_trend=vol_trend,
+            structure_type=structure_type,
+            structure_strength=structure_strength,
+            key_level_proximity=key_level_proximity,
+            liquidity_condition=liquidity_condition,
+            liquidity_trend=liquidity_trend,
+            momentum_alignment=momentum_alignment,
+            momentum_confluence=momentum_confluence,
+            dominant_side=dominant_side,
+            pressure_strength=pressure_strength,
+            overall_clarity=overall_clarity,
+            directional_bias=directional_bias,
+            required_confidence=required_confidence
+        )
 
 
 class EnsembleEngine:
-    """Combines all three models for robust decision making."""
+    """Context-aware multi-model ensemble for adaptive decision making."""
 
     def __init__(
         self,
@@ -56,6 +314,7 @@ class EnsembleEngine:
         self.early_model = early_model
         self.confirmation_model = confirmation_model
         self.momentum_model = momentum_model
+        self.context_analyzer = ContextAnalyzer()
 
     def evaluate(
         self,
@@ -64,41 +323,74 @@ class EnsembleEngine:
         stage: str = "full",  # 'stage_1', 'stage_2', or 'full' (single-stage)
     ) -> Optional[EnsembleDecision]:
         """
-        Evaluate ensemble decision for a single bar.
+        Evaluate ensemble decision with market context awareness.
 
-        Args:
-            row: Row with all features
-            regime: Current market regime
-            stage: Entry stage ('stage_1', 'stage_2', or 'full')
-
-        Returns:
-            EnsembleDecision or None if no signals
+        NEW APPROACH:
+        1. Analyze market context FIRST
+        2. Determine directional bias from context
+        3. Run models for BOTH sides
+        4. Use adaptive thresholds based on context
+        5. Size position based on conviction (context * signal)
         """
-        # Run all three models
-        early_result = self.early_model.predict(row, side="long", regime=regime)
+        # STEP 1: Analyze market context
+        context = self.context_analyzer.analyze(row)
+
+        # STEP 2: Run models for BOTH long and short
+        early_result_long = self.early_model.predict(row, side="long", regime=regime)
+        early_result_short = self.early_model.predict(row, side="short", regime=regime)
+
         confirm_long = self.confirmation_model.predict(row, side="long", regime=regime)
         confirm_short = self.confirmation_model.predict(row, side="short", regime=regime)
+
         momentum_long = self.momentum_model.predict(row, side="long")
         momentum_short = self.momentum_model.predict(row, side="short")
 
-        # Choose best side based on confirmation (with None checks)
-        confirm_score_long = confirm_long.score if confirm_long else 0
-        confirm_score_short = confirm_short.score if confirm_short else 0
-        confirm_result = confirm_long if confirm_score_long > confirm_score_short else confirm_short
+        # STEP 3: Choose best side based on contextual evidence
+        # Not just model scores, but also market structure
+        long_evidence = self._calculate_evidence_score(
+            early_result_long, confirm_long, momentum_long, context, side="long"
+        )
+        short_evidence = self._calculate_evidence_score(
+            early_result_short, confirm_short, momentum_short, context, side="short"
+        )
 
-        momentum_score_long = momentum_long.score if momentum_long else 0
-        momentum_score_short = momentum_short.score if momentum_short else 0
-        momentum_result = momentum_long if momentum_score_long > momentum_score_short else momentum_short
+        # Apply contextual bias (if market clearly favors one direction)
+        if context.directional_bias == "long_preferred":
+            long_evidence *= 1.15  # Boost long signals in bullish context
+        elif context.directional_bias == "short_preferred":
+            short_evidence *= 1.15  # Boost short signals in bearish context
 
-        # Determine side with clear priority: confirmation > early signal > default short
-        if confirm_result:
-            side = confirm_result.side
-        elif early_result and early_result.side:
-            side = early_result.side
+        # Select side with strongest evidence
+        if long_evidence > short_evidence and long_evidence > 0.3:
+            side = "long"
+            early_result = early_result_long
+            confirm_result = confirm_long
+            momentum_result = momentum_long
+            evidence_score = long_evidence
+        elif short_evidence > long_evidence and short_evidence > 0.3:
+            side = "short"
+            early_result = early_result_short
+            confirm_result = confirm_short
+            momentum_result = momentum_short
+            evidence_score = short_evidence
         else:
-            side = "short"  # Conservative default when no signals
+            # No clear direction
+            return None
 
-        # Decision logic based on model agreement
+        # STEP 4: Check against adaptive threshold
+        required_confidence = context.required_confidence
+
+        # Get actual confidence from best model
+        model_confidence = max(
+            confirm_result.score if confirm_result else 0,
+            early_result.score if early_result else 0
+        )
+
+        if model_confidence < required_confidence * 100:  # Convert to 0-100 scale
+            # Signal exists but confidence too low for current context
+            return None
+
+        # STEP 5: Determine action based on model agreements
         agreements = []
         if early_result and early_result.score >= 62:
             agreements.append("early")
@@ -107,76 +399,56 @@ class EnsembleEngine:
         if momentum_result and momentum_result.direction == "with_momentum":
             agreements.append("momentum")
 
-        # Determine action based on agreements and stage
-        if stage == "stage_1":
-            # Early entry stage - only need early signal
-            if early_result and early_result.score >= 62:
-                action = "stage_1"
-                position_size = 0.4  # 40% size for early entry
-                confidence = early_result.score
+        # Calculate base confidence
+        if len(agreements) == 3:
+            base_confidence = (
+                (early_result.score if early_result else 0) +
+                (confirm_result.score if confirm_result else 0) +
+                (momentum_result.score if momentum_result else 0)
+            ) / 3
+            action = "enter_full"
+            base_position_size = 1.0
+        elif len(agreements) == 2:
+            if "early" in agreements and "confirm" in agreements:
+                base_confidence = ((early_result.score if early_result else 0) +
+                                   (confirm_result.score if confirm_result else 0)) / 2
+                action = "enter_reduced"
+                base_position_size = 0.7
+            elif "early" in agreements and "momentum" in agreements:
+                base_confidence = ((early_result.score if early_result else 0) +
+                                   (momentum_result.score if momentum_result else 0)) / 2
+                action = "enter_small"
+                base_position_size = 0.4
             else:
-                return None  # No early signal
-
-        elif stage == "stage_2":
-            # Confirmation stage - need confirmation
-            if confirm_result and confirm_result.is_confirmed:
-                action = "stage_2"
-                position_size = 0.6  # 60% size for confirmation
-                confidence = confirm_result.score
-            else:
-                return None  # Not confirmed
-
-        else:
-            # Full ensemble (single-stage mode)
-            if len(agreements) == 3:
-                # All agree - full position
-                action = "enter_full"
-                position_size = 1.0
-                early_score = early_result.score if early_result else 0
-                confirm_score = confirm_result.score if confirm_result else 0
-                momentum_score = momentum_result.score if momentum_result else 0
-                confidence = (early_score + confirm_score + momentum_score) / 3
-
-            elif len(agreements) == 2:
-                if "early" in agreements and "confirm" in agreements:
-                    # Early + Confirm
-                    action = "enter_reduced"
-                    position_size = 0.7
-                    early_score = early_result.score if early_result else 0
-                    confirm_score = confirm_result.score if confirm_result else 0
-                    confidence = (early_score + confirm_score) / 2
-                elif "early" in agreements and "momentum" in agreements:
-                    # Early + Momentum
-                    action = "enter_small"
-                    position_size = 0.4
-                    early_score = early_result.score if early_result else 0
-                    momentum_score = momentum_result.score if momentum_result else 0
-                    confidence = (early_score + momentum_score) / 2
-                else:
-                    # Confirm + Momentum (no early) - still enter reduced
-                    action = "enter_reduced"
-                    position_size = 0.6
-                    confirm_score = confirm_result.score if confirm_result else 0
-                    momentum_score = momentum_result.score if momentum_result else 0
-                    confidence = (confirm_score + momentum_score) / 2
-
-            elif len(agreements) == 1:
-                if "early" in agreements:
-                    action = "wait"  # Only early, wait for confirmation
-                    position_size = 0.0
-                    confidence = early_result.score
-                else:
-                    action = "skip"  # Only confirm or momentum without early
-                    position_size = 0.0
-                    confidence = 0.0
-
+                base_confidence = ((confirm_result.score if confirm_result else 0) +
+                                   (momentum_result.score if momentum_result else 0)) / 2
+                action = "enter_reduced"
+                base_position_size = 0.6
+        elif len(agreements) == 1:
+            if "early" in agreements:
+                action = "wait"
+                base_confidence = early_result.score if early_result else 0
+                base_position_size = 0.0
             else:
                 action = "skip"
-                position_size = 0.0
-                confidence = 0.0
+                base_confidence = 0
+                base_position_size = 0.0
+        else:
+            action = "skip"
+            base_confidence = 0
+            base_position_size = 0.0
 
-        # Build reasoning
+        # STEP 6: Adjust position size based on conviction
+        # Conviction = combination of context clarity AND signal strength
+        conviction_multiplier = context.overall_clarity * (base_confidence / 100.0)
+        final_position_size = base_position_size * conviction_multiplier
+
+        # Build enhanced reasoning with context
         reasoning = []
+        reasoning.append(f"Context: {context.directional_bias}, clarity={context.overall_clarity:.2f}")
+        reasoning.append(f"Trend: {context.higher_tf_trend} ({context.trend_quality}), strength={context.trend_strength:.2f}")
+        reasoning.append(f"Structure: {context.structure_type}, key_level={context.key_level_proximity}")
+
         if early_result:
             reasoning.append(f"Early: {early_result.score:.0f} (compression={early_result.compression_detected}, volume={early_result.volume_drying})")
         if confirm_result:
@@ -184,17 +456,81 @@ class EnsembleEngine:
         if momentum_result:
             reasoning.append(f"Momentum: {momentum_result.direction} ({momentum_result.strength})")
 
+        reasoning.append(f"Required confidence: {required_confidence:.2f}, Model confidence: {base_confidence:.0f}")
+        reasoning.append(f"Conviction: {conviction_multiplier:.2f}, Final size: {final_position_size:.2f}")
+
+        # Determine conviction level
+        if conviction_multiplier > 0.7:
+            conviction_level = "high"
+        elif conviction_multiplier > 0.4:
+            conviction_level = "medium"
+        else:
+            conviction_level = "low"
+
         return EnsembleDecision(
             action=action,
             side=side,
-            confidence=round(confidence, 2),
-            score=round(confidence * position_size, 2),
+            confidence=round(base_confidence, 2),
+            score=round(evidence_score, 2),
             early_result=early_result,
             confirmation_result=confirm_result,
             momentum_result=momentum_result,
-            position_size_pct=position_size,
+            position_size_pct=final_position_size,
             reasoning=reasoning,
+            market_context=context,
+            conviction_level=conviction_level
         )
+
+    def _calculate_evidence_score(
+        self,
+        early: Optional[EarlySignalResult],
+        confirm: Optional[ConfirmationResult],
+        momentum: Optional[MomentumResult],
+        context: MarketContext,
+        side: str
+    ) -> float:
+        """
+        Calculate composite evidence score for a given side.
+
+        Combines model scores with contextual alignment.
+        Returns 0-1 score where higher means stronger evidence.
+        """
+        score = 0.0
+        weight_sum = 0.0
+
+        # Early signal contribution (weight: 0.3)
+        if early:
+            early_normalized = early.score / 100.0
+            score += early_normalized * 0.3
+            weight_sum += 0.3
+
+        # Confirmation contribution (weight: 0.5) - highest weight
+        if confirm:
+            confirm_normalized = confirm.score / 100.0
+            score += confirm_normalized * 0.5
+            weight_sum += 0.5
+
+        # Momentum contribution (weight: 0.2)
+        if momentum:
+            momentum_score = 0.7 if momentum.direction == "with_momentum" else 0.3
+            score += momentum_score * 0.2
+            weight_sum += 0.2
+
+        # Normalize if not all models contributed
+        if weight_sum > 0:
+            score = score / weight_sum
+
+        # Apply contextual alignment bonus
+        if side == "long" and context.directional_bias == "long_preferred":
+            score *= 1.1
+        elif side == "short" and context.directional_bias == "short_preferred":
+            score *= 1.1
+
+        # Momentum confluence bonus
+        if context.momentum_confluence:
+            score *= 1.05
+
+        return min(score, 1.0)
 
     def get_feature_summary(self) -> Dict[str, Any]:
         """Get summary of important features across all models."""
