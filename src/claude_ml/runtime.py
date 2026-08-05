@@ -854,6 +854,7 @@ class RuntimeEngine:
         This allows us to analyze missed opportunities and understand why signals were skipped.
         """
         try:
+            logger.info(f"Logging decision to signal_audit_log: {symbol} {action} (conf={confidence:.0f}%)")
             self.conn.execute("""
                 INSERT INTO signal_audit_log (
                     ts, symbol, close_price, atr_pct, regime,
@@ -884,9 +885,9 @@ class RuntimeEngine:
                 })
             ))
             self.conn.commit()
-            logger.debug(f"Decision logged: {symbol} {action} (conf={confidence:.0f}%)")
+            logger.info(f"Decision logged successfully: {symbol} {action}")
         except Exception as e:
-            logger.warning(f"Failed to log decision to signal_audit_log: {e}")
+            logger.error(f"Failed to log decision to signal_audit_log: {e}", exc_info=True)
 
     def _log_health(self, status: str, note: str) -> None:
         """Log health check result."""
