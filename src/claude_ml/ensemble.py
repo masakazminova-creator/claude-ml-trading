@@ -69,9 +69,9 @@ class MarketContext:
     cross_market_data_quality: float = 0.0  # 0-1 quality of cross-market data
 
     # Computed metrics
-    overall_clarity: float  # 0-1 how clear is the market picture
-    directional_bias: str  # 'long_preferred', 'short_preferred', 'neutral'
-    required_confidence: float  # Minimum confidence to enter based on context
+    overall_clarity: float = 0.5  # 0-1 how clear is the market picture
+    directional_bias: str = "neutral"  # 'long_preferred', 'short_preferred', 'neutral'
+    required_confidence: float = 0.70  # Minimum confidence to enter based on context
 
 
 @dataclass(slots=True)
