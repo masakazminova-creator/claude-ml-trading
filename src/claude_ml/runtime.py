@@ -882,7 +882,7 @@ class RuntimeEngine:
                     early_probability, confirmation_probability, momentum_score,
                     adaptive_early_threshold, adaptive_confirmation_threshold, adaptive_momentum_threshold,
                     action, action_reason, features_json, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
                 symbol,
