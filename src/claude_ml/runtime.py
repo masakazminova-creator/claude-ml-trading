@@ -236,6 +236,31 @@ class RuntimeEngine:
             )
         """)
 
+        # Table for logging ALL decisions (including SKIP/WAIT)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS signal_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                close_price REAL NOT NULL,
+                atr_pct REAL NOT NULL,
+                regime TEXT NOT NULL,
+                early_probability REAL,
+                confirmation_probability REAL,
+                momentum_score REAL,
+                adaptive_early_threshold REAL,
+                adaptive_confirmation_threshold REAL,
+                adaptive_momentum_threshold REAL,
+                action TEXT NOT NULL,
+                action_reason TEXT,
+                confidence_pct REAL,
+                position_size_pct REAL,
+                features_json TEXT,
+                payload_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         self.conn.commit()
 
     def run(self) -> None:
@@ -689,6 +714,44 @@ class RuntimeEngine:
                         featured=featured,
                     )
 
+                    # Log ALL decisions to signal_audit table (including ENTER)
+                    self._log_all_decisions(
+                        ts=latest_ts,
+                        symbol=symbol,
+                        close_price=close_price,
+                        atr_pct=atr_pct,
+                        regime=regime_name,
+                        early_prob=decision.early_result.score if decision.early_result else 0,
+                        confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
+                        momentum_score=decision.momentum_result.direction_value if decision.momentum_result else 0,
+                        adaptive_early_thresh=early_thresh,
+                        adaptive_confirm_thresh=confirm_thresh,
+                        adaptive_momentum_thresh=momentum_thresh,
+                        action=decision.action.lower(),
+                        confidence=decision.confidence,
+                        position_size_pct=decision.position_size_pct,
+                        reasoning="; ".join(decision.reasoning[:3]),
+                    )
+                else:
+                    # SKIP or WAIT decision - log for analysis
+                    self._log_all_decisions(
+                        ts=latest_ts,
+                        symbol=symbol,
+                        close_price=close_price,
+                        atr_pct=atr_pct,
+                        regime=regime_name,
+                        early_prob=decision.early_result.score if decision.early_result else 0,
+                        confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
+                        momentum_score=decision.momentum_result.direction_value if decision.momentum_result else 0,
+                        adaptive_early_thresh=early_thresh,
+                        adaptive_confirm_thresh=confirm_thresh,
+                        adaptive_momentum_thresh=momentum_thresh,
+                        action=decision.action.lower(),
+                        confidence=decision.confidence,
+                        position_size_pct=0,
+                        reasoning="; ".join(decision.reasoning[:3]) if decision.reasoning else "No signals",
+                    )
+
         else:
             # Data-only mode
             print(f"[{symbol}] Regime: {regime_name}, Price: {close_price:.4f}")
@@ -807,6 +870,65 @@ class RuntimeEngine:
             )
         except Exception as e:
             logger.warning(f"Audit logging failed: {e}")
+
+    def _log_all_decisions(
+        self,
+        ts,
+        symbol: str,
+        close_price: float,
+        atr_pct: float,
+        regime: str,
+        early_prob: float,
+        confirm_prob: float,
+        momentum_score: float,
+        adaptive_early_thresh: float,
+        adaptive_confirm_thresh: float,
+        adaptive_momentum_thresh: float,
+        action: str,
+        confidence: float,
+        position_size_pct: float,
+        reasoning: str,
+    ) -> None:
+        """
+        Log ALL decisions (ENTER, SKIP, WAIT) to signal_audit table for analysis.
+
+        This allows us to analyze missed opportunities and understand why signals were skipped.
+        """
+        try:
+            self.conn.execute("""
+                INSERT INTO signal_audit_log (
+                    ts, symbol, close_price, atr_pct, regime,
+                    early_probability, confirmation_probability, momentum_score,
+                    adaptive_early_threshold, adaptive_confirmation_threshold, adaptive_momentum_threshold,
+                    action, action_reason, confidence_pct, position_size_pct,
+                    features_json, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
+                symbol,
+                close_price,
+                atr_pct,
+                regime,
+                early_prob,
+                confirm_prob,
+                momentum_score,
+                adaptive_early_thresh,
+                adaptive_confirm_thresh,
+                adaptive_momentum_thresh,
+                action,
+                reasoning,
+                confidence,
+                position_size_pct,
+                "{}",  # Empty features_json for now
+                json.dumps({
+                    "close_price": close_price,
+                    "logged_at": datetime.now(timezone.utc).isoformat(),
+                })
+            ))
+            self.conn.commit()
+            logger.debug(f"Decision logged: {symbol} {action} (conf={confidence:.0f}%)")
+        except Exception as e:
+            logger.warning(f"Failed to log decision to signal_audit_log: {e}")
 
     def _log_health(self, status: str, note: str) -> None:
         """Log health check result."""
