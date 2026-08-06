@@ -144,9 +144,9 @@ class RuntimeEngine:
             trade_id, symbol, side, entry_price, payload_json = row
             payload = json.loads(payload_json) if payload_json else {}
 
-            # Extract ATR from payload or use default
-            atr_pct = float(payload.get('atr_pct', 0.0025))
-            atr = atr_pct * entry_price / 100
+            # Extract ATR from payload or use default (stored as ratio, not percentage)
+            atr_ratio = float(payload.get('atr_pct', 0.0025))
+            atr = atr_ratio * entry_price  # Convert ratio to absolute value
 
             # Calculate TP/SL levels (same as when position was created)
             tp_level = entry_price + (atr * 2.5) if side == "long" else entry_price - (atr * 2.5)
@@ -517,8 +517,8 @@ class RuntimeEngine:
         # Get latest row
         latest_row = featured.iloc[-1]
         close_price = float(latest_row["close"])
-        atr_pct = float(latest_row.get("atr_pct_14", 0.5))  # ATR as percentage
-        atr = atr_pct * close_price / 100  # Convert % to absolute value
+        atr_ratio = float(latest_row.get("atr_pct_14", 0.005))  # ATR as ratio (not percentage)
+        atr = atr_ratio * close_price  # Convert ratio to absolute value
 
         # Check trailing stop for existing position
         if symbol in self.trailing_stops:
@@ -665,22 +665,23 @@ class RuntimeEngine:
                 return  # Skip signal generation for this bar
 
         # Get adaptive thresholds for this symbol and regime
+        atr_pct_for_thresholds = atr_ratio * 100  # Convert ratio to percentage for threshold engine
         early_thresh = self.threshold_engine.get_adaptive_threshold(
             symbol=symbol,
             regime=regime_name,
-            atr_pct=atr_pct,
+            atr_pct=atr_pct_for_thresholds,
             threshold_type="early_signal"
         )
         confirm_thresh = self.threshold_engine.get_adaptive_threshold(
             symbol=symbol,
             regime=regime_name,
-            atr_pct=atr_pct,
+            atr_pct=atr_pct_for_thresholds,
             threshold_type="confirmation"
         )
         momentum_thresh = self.threshold_engine.get_adaptive_threshold(
             symbol=symbol,
             regime=regime_name,
-            atr_pct=atr_pct,
+            atr_pct=atr_pct_for_thresholds,
             threshold_type="momentum"
         )
 
@@ -714,7 +715,7 @@ class RuntimeEngine:
                     ts=latest_ts,
                     symbol=symbol,
                     close_price=close_price,
-                    atr_pct=atr_pct,
+                    atr_pct=atr_ratio * 100,  # Convert ratio to percentage for logging
                     regime=regime_name,
                     early_prob=decision.early_result.score if decision.early_result else 0,
                     confirm_prob=decision.confirmation_result.score if decision.confirmation_result else 0,
@@ -734,7 +735,7 @@ class RuntimeEngine:
                     ts=latest_ts,
                     symbol=symbol,
                     close_price=close_price,
-                    atr_pct=atr_pct,
+                    atr_pct=atr_ratio * 100,  # Convert ratio to percentage for logging
                     regime=regime_name,
                     early_prob=0,
                     confirm_prob=0,
@@ -777,7 +778,7 @@ class RuntimeEngine:
             payload = {
                 "confidence": decision.confidence,
                 "regime": regime_name,
-                "atr_pct": atr_pct,
+                "atr_pct": atr_ratio,  # Store as ratio for internal use
                 "reasoning": decision.reasoning[:3],
                 "exit_strategy": "trailing_stop_only"
             }
@@ -856,7 +857,7 @@ class RuntimeEngine:
                 ts=latest_ts,
                 symbol=symbol,
                 close_price=close_price,
-                atr_pct=atr_pct * 100 / close_price if close_price > 0 else 0.5,
+                atr_pct=(atr_ratio * 100) if close_price > 0 else 0.5,  # Convert to percentage for logging
                 regime=regime_name,
                 decision=decision,
                 featured=featured,
