@@ -32,7 +32,7 @@ from .risk_manager import RiskManager
 from .continuous_learning import ContinuousLearningEngine
 from .adaptive_thresholds import AdaptiveThresholdEngine
 from .signal_audit import SignalAuditEngine
-from .trailing_stop import TrailingStopState, create_trailing_stop, update_trailing_stop, check_trailing_stop_exit
+from .trailing_stop import TrailingStopState, create_trailing_stop, update_trailing_stop, check_trailing_stop_exit, check_fixed_sl_exit
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
 from .models.momentum import MomentumModel
@@ -465,6 +465,73 @@ class RuntimeEngine:
         if symbol in self.trailing_stops:
             trailing_state = self.trailing_stops[symbol]
 
+            # NEW: Check fixed stop loss BEFORE trailing activation
+            sl_hit, sl_reason = check_fixed_sl_exit(trailing_state, close_price)
+
+            if sl_hit:
+                logger.info(f"[{symbol}] FIXED STOP LOSS HIT at {close_price:.4f}")
+                logger.info(f"         Reason: {sl_reason}")
+
+                # Calculate PnL at SL
+                raw_pnl_pct = ((close_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
+
+                # Subtract trading costs
+                total_cost_bps = self.settings.fee_bps * 2 + self.settings.slippage_bps * 2
+                cost_pct = total_cost_bps / 100
+                net_pnl_pct = raw_pnl_pct - cost_pct
+
+                logger.info(f"         Gross PnL: {raw_pnl_pct:+.3f}%")
+                logger.info(f"         Trading Costs: -{cost_pct:.3f}% (fee+slippage)")
+                logger.info(f"         Net PnL: {net_pnl_pct:+.3f}%")
+
+                # Close position in database
+                self.conn.execute("""
+                    UPDATE paper_trades
+                    SET status = 'closed',
+                        exit_ts = ?,
+                        exit_price = ?,
+                        pnl_pct = ?,
+                        exit_reason = 'fixed_stop_loss'
+                    WHERE symbol = ? AND status = 'open'
+                """, (latest_ts.isoformat(), close_price, net_pnl_pct, symbol))
+
+                logger.info(f"[{symbol}] Position closed in database (fixed SL)")
+
+                # Send Telegram notification
+                try:
+                    import requests
+                    pnl_sign = "+" if net_pnl_pct >= 0 else ""
+                    pnl_emoji = "🔴"  # Red circle for loss
+                    exit_msg = (
+                        f"{pnl_emoji} *STOP LOSS HIT*\n\n"
+                        f"Symbol: `{symbol}`\n"
+                        f"Side: *{trailing_state.side.upper()}*\n"
+                        f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
+                        f"Exit Price: `${close_price:.2f}`\n"
+                        f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
+                        f"Costs: `-{cost_pct:.3f}%`\n"
+                        f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
+                        f"Exit Reason: *Fixed Stop Loss*\n"
+                        f"SL Level: `${trailing_state.initial_sl:.2f}`"
+                    )
+                    url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
+                    data = {
+                        "chat_id": self.settings.telegram_chat_id,
+                        "text": exit_msg,
+                        "parse_mode": "Markdown"
+                    }
+                    response = requests.post(url, json=data, timeout=10)
+                    if response.status_code == 200:
+                        logger.info("Telegram SL notification sent")
+                    else:
+                        logger.warning(f"Telegram API error: {response.text}")
+                except Exception as e:
+                    logger.warning(f"Failed to send Telegram SL notification: {e}")
+
+                # Remove from trailing stops
+                del self.trailing_stops[symbol]
+                return  # Skip signal generation
+
             # Update trailing stop with new price
             trailing_state = update_trailing_stop(
                 state=trailing_state,
@@ -473,7 +540,7 @@ class RuntimeEngine:
             )
             self.trailing_stops[symbol] = trailing_state
 
-            # Check if stop hit
+            # Check if trailing stop hit
             if check_trailing_stop_exit(trailing_state, close_price):
                 # Calculate raw price PnL
                 raw_pnl_pct = ((close_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
@@ -672,16 +739,20 @@ class RuntimeEngine:
 
             # Create ATR-based trailing stop that activates AT TAKE PROFIT level
             tp_level = risk_result.take_profit_price if risk_result.take_profit_price else close_price + (atr * 2.5)
+            sl_level = risk_result.stop_loss_price if risk_result.stop_loss_price else None
+
             trailing_state = create_trailing_stop(
                 symbol=symbol,
                 side=decision.side,
                 entry_price=close_price,
                 atr=atr,
+                tp_level=tp_level,
+                sl_level=sl_level,
                 trigger_mult=(tp_level - close_price) / atr,  # Activate at TP level
                 stop_mult=1.5,     # Stop at 1.5 ATR distance from max
             )
             self.trailing_stops[symbol] = trailing_state
-            logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f})")
+            logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f}, fixed SL: ${sl_level})")
 
             # Send Telegram notification for entry
             try:

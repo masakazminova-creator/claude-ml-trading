@@ -29,6 +29,7 @@ class TrailingStopState:
     highest_price: float  # For long positions
     lowest_price: float   # For short positions
     is_active: bool = False  # Becomes active after trigger price reached
+    initial_sl: Optional[float] = None  # Fixed stop loss (active until TP triggered)
     trigger_distance_atr_mult: float = 0.5  # ATR multiplier to activate
     stop_distance_atr_mult: float = 1.5     # ATR multiplier for stop distance
 
@@ -126,6 +127,8 @@ def update_trailing_stop(
     # Update state
     if is_triggered:
         state.is_active = True
+        # FIXED SL is now removed - trailing takes over
+        state.initial_sl = None
         if state.side == "long":
             # For long, stop should only move up
             if new_stop > state.current_stop_price:
@@ -142,10 +145,42 @@ def update_trailing_stop(
     logger.debug(
         f"[{state.symbol}] Trailing stop updated: "
         f"price={current_price:.4f}, highest={state.highest_price:.4f}, "
-        f"stop={state.current_stop_price:.4f}, active={state.is_active}"
+        f"stop={state.current_stop_price:.4f}, active={state.is_active}, "
+        f"fixed_sl={'active' if state.initial_sl else 'removed'}"
     )
 
     return state
+
+
+def check_fixed_sl_exit(
+    state: TrailingStopState,
+    current_price: float,
+) -> tuple[bool, str]:
+    """
+    Check if fixed stop loss is hit (before TP activation).
+
+    Args:
+        state: Current trailing stop state
+        current_price: Current market price
+
+    Returns:
+        (is_hit, reason) - True if SL hit with reason
+    """
+    if state.is_active:
+        # Trailing already active, fixed SL no longer valid
+        return False, ""
+
+    if state.initial_sl is None:
+        return False, ""
+
+    if state.side == "long":
+        if current_price <= state.initial_sl:
+            return True, f"Fixed SL hit at {state.initial_sl:.2f}"
+    else:  # short
+        if current_price >= state.initial_sl:
+            return True, f"Fixed SL hit at {state.initial_sl:.2f}"
+
+    return False, ""
 
 
 def check_trailing_stop_exit(
@@ -176,6 +211,8 @@ def create_trailing_stop(
     side: str,
     entry_price: float,
     atr: float,
+    tp_level: Optional[float] = None,
+    sl_level: Optional[float] = None,
     trigger_mult: float = 0.5,
     stop_mult: float = 1.5,
 ) -> TrailingStopState:
@@ -187,6 +224,8 @@ def create_trailing_stop(
         side: 'long' or 'short'
         entry_price: Entry price
         atr: Current ATR value
+        tp_level: Take profit level (activation point for trailing)
+        sl_level: Stop loss level (fixed until TP activated)
         trigger_mult: ATR multiplier to activate trailing
         stop_mult: ATR multiplier for stop distance
 
@@ -200,6 +239,9 @@ def create_trailing_stop(
     else:
         initial_stop = entry_price + initial_stop_distance
 
+    # Use provided SL if available, otherwise use calculated initial stop
+    fixed_sl = sl_level if sl_level else initial_stop
+
     return TrailingStopState(
         symbol=symbol,
         side=side,
@@ -207,6 +249,7 @@ def create_trailing_stop(
         current_stop_price=initial_stop,
         highest_price=entry_price,
         lowest_price=entry_price,
+        initial_sl=fixed_sl,  # Fixed SL active until TP triggered
         is_active=False,
         trigger_distance_atr_mult=trigger_mult,
         stop_distance_atr_mult=stop_mult,
