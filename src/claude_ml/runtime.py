@@ -484,7 +484,7 @@ class RuntimeEngine:
 
         if df.empty:
             logger.warning(f"Empty data for {symbol}")
-            raise RuntimeError(f"No data fetched for {symbol}")
+            return  # Don't raise, just skip to next symbol
 
         # Build features (includes early detection features)
         logger.debug(f"Building features for {symbol}...")
@@ -497,7 +497,7 @@ class RuntimeEngine:
 
         if featured.empty:
             logger.warning(f"Empty features for {symbol}")
-            raise RuntimeError(f"No features built for {symbol}")
+            return  # Don't raise, just skip to next symbol
 
         # Classify regime
         logger.debug(f"Classifying regime for {symbol}...")
