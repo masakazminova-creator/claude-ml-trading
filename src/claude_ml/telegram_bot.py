@@ -38,6 +38,7 @@ class TradingBot:
         self.application.add_handler(CommandHandler("balance", self.balance))
         self.application.add_handler(CommandHandler("trades", self.trades))
         self.application.add_handler(CommandHandler("status", self.status))
+        self.application.add_handler(CommandHandler("position", self.position))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
@@ -51,6 +52,9 @@ class TradingBot:
             ],
             [
                 KeyboardButton("📊 Сделки"),
+                KeyboardButton("📍 Позиция"),
+            ],
+            [
                 KeyboardButton("🔄 Обновить"),
             ],
         ]
@@ -236,6 +240,108 @@ class TradingBot:
             logger.error(f"Error in trades command: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка получения сделок: {e}")
 
+    async def position(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /position command - show current open position details."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Get open position
+            cursor.execute("""
+                SELECT id, symbol, side, entry_ts, entry_price, signal_probability, payload_json
+                FROM paper_trades
+                WHERE status = 'open'
+                ORDER BY id DESC
+                LIMIT 1
+            """)
+            pos = cursor.fetchone()
+
+            if not pos:
+                await update.message.reply_text("📭 Нет открытых позиций")
+                conn.close()
+                return
+
+            trade_id, symbol, side, entry_ts, entry_price, confidence, payload_json = pos
+            import json
+            payload = json.loads(payload_json) if payload_json else {}
+
+            # Extract data from payload
+            atr_pct = float(payload.get('atr_pct', 0.0))
+            regime = payload.get('regime', 'N/A')
+            reasoning = payload.get('reasoning', [])
+            exit_strategy = payload.get('exit_strategy', 'N/A')
+
+            # Calculate TP/SL levels (using same logic as runtime)
+            atr_value = entry_price * atr_pct
+            tp_distance = atr_value * 2.5
+            sl_distance = atr_value * 2.0
+
+            if side == "long":
+                tp_level = entry_price + tp_distance
+                sl_level = entry_price - sl_distance
+            else:  # short
+                tp_level = entry_price - tp_distance
+                sl_level = entry_price + sl_distance
+
+            # Get current price from OKX
+            import requests
+            try:
+                response = requests.get('https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP', timeout=3)
+                current_price = float(response.json()['data'][0]['last'])
+                pnl_pct = ((current_price - entry_price) / entry_price * 100) if side == "long" else ((entry_price - current_price) / entry_price * 100)
+            except:
+                current_price = None
+                pnl_pct = None
+
+            conn.close()
+
+            # Format message
+            side_emoji = "🟢" if side == "long" else "🔴"
+            side_str = side.upper()
+
+            msg = f"{side_emoji} *Текущая позиция #{trade_id}*\n\n"
+            msg += f"*Symbol:* `{symbol}`\n"
+            msg += f"*Side:* *{side_str}*\n"
+            msg += f"*Entry:* `${entry_price:,.2f}`\n"
+            msg += f"*Confidence:* `{confidence*100:.1f}%`\n"
+            msg += f"*Regime:* `{regime}`\n\n"
+
+            # TP/SL info
+            msg += f"🎯 *Уровни:*\n"
+            msg += f"Take Profit: `${tp_level:,.2f}`\n"
+            msg += f"Stop Loss: `${sl_level:,.2f}`\n"
+            msg += f"Exit Strategy: `{exit_strategy}`\n\n"
+
+            # Current PnL
+            if current_price is not None and pnl_pct is not None:
+                pnl_sign = "+" if pnl_pct >= 0 else ""
+                pnl_emoji = "🟢" if pnl_pct > 0 else "🔴"
+                msg += f"📈 *Текущий статус:*\n"
+                msg += f"Current Price: `${current_price:,.2f}`\n"
+                msg += f"PnL: `{pnl_sign}{pnl_pct:.3f}%` {pnl_emoji}\n\n"
+
+            # Entry time
+            entry_time = str(entry_ts)[:19] if entry_ts else 'N/A'
+            msg += f"⏰ *Время входа:* {entry_time}\n\n"
+
+            # Reasoning
+            if reasoning:
+                msg += f"💡 *Причина входа:*\n"
+                for i, reason in enumerate(reasoning[:3], 1):
+                    msg += f"{i}. {reason}\n"
+
+            # Add refresh button
+            keyboard = [
+                [InlineKeyboardButton("🔄 Обновить цену", callback_data=f"refresh_position_{trade_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=reply_markup)
+
+        except Exception as e:
+            logger.error(f"Error in position command: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка получения позиции: {e}")
+
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
         try:
@@ -285,6 +391,8 @@ class TradingBot:
             await self.status(update, context)
         elif text == "📊 Сделки":
             await self.trades(update, context)
+        elif text == "📍 Позиция":
+            await self.position(update, context)
         elif text == "🔄 Обновить":
             await self.balance(update, context)
 
@@ -314,6 +422,15 @@ class TradingBot:
         elif query.data == "refresh_balance":
             await query.answer("Баланс обновлён!")
             await self.balance(fake_update, context)
+        elif query.data.startswith("refresh_position_"):
+            trade_id = int(query.data.split("_")[-1])
+            await query.answer("Позиция обновлена!")
+            # Create a fake update with message for position command
+            fake_update = Update(
+                update_id=update.update_id,
+                message=query.message
+            )
+            await self.position(fake_update, context)
 
     def send_trade_notification(self, message: str):
         """Send trade notification to chat."""
