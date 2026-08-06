@@ -81,26 +81,27 @@ class TradingBot:
             start_row = cursor.fetchone()
             start_balance = float(start_row[0]) if start_row and start_row[0] is not None else 10000.0
 
-            # Sum only CLOSED trades PnL (not open positions)
+            # Get all CLOSED trades PnL (not open positions)
             cursor.execute("""
-                SELECT SUM(pnl_pct) FROM paper_trades
+                SELECT pnl_pct FROM paper_trades
                 WHERE status = 'closed'
                   AND exit_ts IS NOT NULL
                   AND ABS(pnl_pct) > 0.01
+                ORDER BY id
             """)
-            pnl_row = cursor.fetchone()
-            realized_pnl_pct = float(pnl_row[0]) if pnl_row and pnl_row[0] is not None else 0.0
+            pnl_rows = cursor.fetchall()
 
-            # Current balance = start + realized PnL only
-            current_balance = start_balance * (1 + realized_pnl_pct / 100)
+            # Calculate balance using COMPOUND returns (not simple sum!)
+            current_balance = start_balance
+            for row in pnl_rows:
+                pnl_pct = float(row[0]) if row[0] is not None else 0.0
+                current_balance *= (1 + pnl_pct / 100)  # Compound each trade
 
-            # Get total PnL
-            cursor.execute("""
-                SELECT SUM(pnl_pct) FROM paper_trades
-                WHERE status IN ('closed', 'shadow_closed') AND pnl_pct IS NOT NULL
-            """)
-            total_pnl_row = cursor.fetchone()
-            total_pnl = float(total_pnl_row[0]) if total_pnl_row and total_pnl_row[0] is not None else 0.0
+            # Total PnL percentage
+            total_pnl_pct = ((current_balance - start_balance) / start_balance * 100) if start_balance > 0 else 0.0
+
+            # Total PnL percentage already calculated above
+            total_pnl = total_pnl_pct
 
             # Get REAL trade count (exclude trades with very small PnL - likely test/duplicate)
             cursor.execute("""
@@ -126,7 +127,7 @@ class TradingBot:
             total_trades = int(wr_row[1]) if wr_row and wr_row[1] is not None else 0
             win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
 
-            # Calculate drawdown
+            # Calculate drawdown from equity curve
             cursor.execute("""
                 SELECT MAX(balance) FROM equity_curve
             """)
