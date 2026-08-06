@@ -17,6 +17,7 @@ Decision framework:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 import math
@@ -27,6 +28,8 @@ from .models.early_signal import EarlySignalModel, EarlySignalResult
 from .models.confirmation import ConfirmationModel, ConfirmationResult
 from .models.momentum import MomentumModel, MomentumResult
 from .cross_market import get_cross_market_features
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
