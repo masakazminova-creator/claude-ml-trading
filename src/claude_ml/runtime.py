@@ -125,13 +125,19 @@ class RuntimeEngine:
     def _restore_trailing_stops_from_db(self) -> None:
         """Restore trailing stops for open positions from database on startup."""
         logger.info("Restoring trailing stops from database...")
+        print("DEBUG: Restoring trailing stops...")
 
-        # Get all open positions
-        cursor = self.conn.execute("""
-            SELECT id, symbol, side, entry_price, payload_json
-            FROM paper_trades
-            WHERE status = 'open'
-        """)
+        try:
+            # Get all open positions
+            cursor = self.conn.execute("""
+                SELECT id, symbol, side, entry_price, payload_json
+                FROM paper_trades
+                WHERE status = 'open'
+            """)
+        except Exception as e:
+            logger.error(f"Failed to query open positions: {e}")
+            print(f"DEBUG: Query failed: {e}")
+            return
 
         restored_count = 0
         for row in cursor.fetchall():
@@ -164,8 +170,13 @@ class RuntimeEngine:
 
         if restored_count > 0:
             logger.info(f"Restored {restored_count} trailing stop(s) from database")
+            print(f"DEBUG: Restored {restored_count} trailing stops")
         else:
             logger.info("No open positions to restore trailing stops for")
+            print("DEBUG: No open positions found")
+        except Exception as e:
+            logger.error(f"Failed to restore trailing stops: {e}", exc_info=True)
+            print(f"DEBUG: Restore failed with error: {e}")
 
     def _load_early_model(self) -> Optional[EarlySignalModel]:
         """Load early signal model."""
