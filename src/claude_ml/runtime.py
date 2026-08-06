@@ -35,6 +35,7 @@ from .signal_audit import SignalAuditEngine
 from .trailing_stop import TrailingStopState, create_trailing_stop, update_trailing_stop, check_trailing_stop_exit, check_fixed_sl_exit
 from .feature_importance import OnlineFeatureSelector
 from .multi_timeframe import MultiTimeframeAnalyzer
+from .regime_models import ExpertRouter, RegimeClassification
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
 from .models.momentum import MomentumModel
@@ -76,6 +77,9 @@ class RuntimeEngine:
         self.mtf_analyzers: Dict[str, MultiTimeframeAnalyzer] = {}
         for symbol in settings.symbols:
             self.mtf_analyzers[symbol] = MultiTimeframeAnalyzer(symbol=symbol)
+
+        # Initialize expert router (Phase 5) - regime-specific models
+        self.expert_router = ExpertRouter()
 
         # Load models (if available)
         self.early_model = self._load_early_model()
@@ -536,6 +540,14 @@ class RuntimeEngine:
         latest_ts = featured["ts"].iloc[-1]
         if not self._is_candle_fresh(latest_ts, symbol):
             return
+
+        # Phase 5: Get current regime classification from expert router
+        try:
+            regime_class = self.expert_router.get_current_regime(featured)
+            logger.debug(f"[{symbol}] Regime: {regime_class.primary_regime} (confidence={regime_class.confidence:.2f})")
+        except Exception as e:
+            logger.warning(f"Regime detection failed for {symbol}: {e}")
+            regime_class = None
 
         # Get latest row
         latest_row = featured.iloc[-1]

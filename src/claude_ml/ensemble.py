@@ -602,6 +602,52 @@ class EnsembleEngine:
         if context.momentum_confluence:
             score *= 1.05
 
+        # === MARKET STRUCTURE AWARENESS (Phase 4) ===
+
+        # KEY LEVEL PROXIMITY - Critical for avoiding bad entries at extremes
+        if context.key_level_proximity == "at_resistance" and side == "long":
+            score *= 0.70  # Strong penalty for longs at resistance
+        elif context.key_level_proximity == "at_support" and side == "short":
+            score *= 0.70  # Strong penalty for shorts at support
+
+        # STRUCTURE TYPE ADJUSTMENT - Respect market geometry
+        if context.structure_type == "range":
+            # In ranges, fade extremes (buy low, sell high)
+            if side == "long" and context.key_level_proximity == "at_resistance":
+                score *= 0.80  # Additional penalty - buying at range top
+            elif side == "short" and context.key_level_proximity == "at_support":
+                score *= 0.80  # Additional penalty - selling at range bottom
+            elif side == "long" and context.key_level_proximity == "at_support":
+                score *= 1.15  # Bonus - buying at range bottom (mean reversion)
+            elif side == "short" and context.key_level_proximity == "at_resistance":
+                score *= 1.15  # Bonus - selling at range top (mean reversion)
+
+        # TREND STRUCTURE RESPECT - Don't fight clear trends
+        elif context.structure_type == "HH_HL":  # Uptrend
+            if side == "short":
+                score *= 0.85  # Penalty for counter-trend shorts in uptrend
+
+        elif context.structure_type == "LH_LL":  # Downtrend
+            if side == "long":
+                score *= 0.85  # Penalty for counter-trend longs in downtrend
+
+        # HIGHER TIMEFRAME TREND ALIGNMENT - Respect the bigger picture
+        if context.higher_tf_trend == "bullish" and side == "short":
+            score *= 0.90  # Slight penalty for counter-trend
+        elif context.higher_tf_trend == "bearish" and side == "long":
+            score *= 0.90  # Slight penalty for counter-trend
+
+        # VOLATILITY REGIME ADJUSTMENT - Be cautious in extreme vol
+        if context.vol_regime == "extreme":
+            score *= 0.85  # Reduce conviction in extreme volatility
+        elif context.vol_regime == "low":
+            if context.structure_type == "range":
+                score *= 1.10  # Low vol + range = good for mean reversion
+
+        # LIQUIDITY CHECK - Avoid trading in thin markets
+        if context.liquidity_condition == "thin":
+            score *= 0.90  # Reduce conviction when liquidity is poor
+
         return min(score, 1.0)
 
     def get_feature_summary(self) -> Dict[str, Any]:
