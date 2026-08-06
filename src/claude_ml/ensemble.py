@@ -416,6 +416,9 @@ class EnsembleEngine:
         elif context.directional_bias == "short_preferred":
             short_evidence *= 1.15  # Boost short signals in bearish context
 
+        # LOG evidence comparison for transparency
+        print(f"[EVIDENCE] Long: {long_evidence:.3f} | Short: {short_evidence:.3f} | Diff: {abs(long_evidence - short_evidence):.3f}")
+
         # Select side with strongest evidence
         if long_evidence > short_evidence and long_evidence > 0.3:
             side = "long"
@@ -423,18 +426,25 @@ class EnsembleEngine:
             confirm_result = confirm_long
             momentum_result = momentum_long
             evidence_score = long_evidence
+            print(f"[SIDE SELECTION] LONG chosen (evidence advantage: +{((long_evidence - short_evidence) * 100):.1f}%)")
         elif short_evidence > long_evidence and short_evidence > 0.3:
             side = "short"
             early_result = early_result_short
             confirm_result = confirm_short
             momentum_result = momentum_short
             evidence_score = short_evidence
+            print(f"[SIDE SELECTION] SHORT chosen (evidence advantage: +{((short_evidence - long_evidence) * 100):.1f}%)")
         else:
             # No clear direction
+            print(f"[SIDE SELECTION] SKIP - no clear winner (long={long_evidence:.3f}, short={short_evidence:.3f})")
             return None
 
         # STEP 4: Check against adaptive threshold
         required_confidence = context.required_confidence
+
+        # LOG context analysis
+        print(f"[CONTEXT] Bias: {context.directional_bias}, Clarity: {context.overall_clarity:.2f}")
+        print(f"[CONTEXT] Required confidence: {required_confidence:.3f}")
 
         # Get actual confidence from best model
         model_confidence = max(
@@ -442,8 +452,11 @@ class EnsembleEngine:
             early_result.score if early_result else 0
         )
 
+        print(f"[CONFIDENCE] Model: {model_confidence:.1f}% vs Required: {required_confidence*100:.1f}%")
+
         if model_confidence < required_confidence * 100:  # Convert to 0-100 scale
             # Signal exists but confidence too low for current context
+            print(f"[SKIP] Confidence too low ({model_confidence:.1f}% < {required_confidence*100:.1f}%)")
             return None
 
         # STEP 5: Determine action based on model agreements
