@@ -93,26 +93,6 @@ class TradingBot:
 
             # Current balance = start + realized PnL only
             current_balance = start_balance * (1 + realized_pnl_pct / 100)
-                row = cursor.fetchone()
-                start_balance = float(row[0]) if row else 10000.0
-
-                # Calculate actual USD profit from trades
-                cursor.execute("""
-                    SELECT entry_price, exit_price FROM paper_trades
-                    WHERE status IN ('closed', 'shadow_closed') AND pnl_pct IS NOT NULL
-                """)
-                trades = cursor.fetchall()
-
-                total_profit_usd = 0.0
-                for entry, exit_p in trades:
-                    if entry and exit_p:
-                        # Assuming position size was ~70% of balance
-                        position_size = start_balance * 0.7
-                        pnl_usd = position_size * ((exit_p - entry) / entry)
-                        total_profit_usd += pnl_usd
-
-                current_balance = start_balance + total_profit_usd
-                total_pnl_pct = (total_profit_usd / start_balance * 100) if start_balance > 0 else 0.0
 
             # Get total PnL
             cursor.execute("""
