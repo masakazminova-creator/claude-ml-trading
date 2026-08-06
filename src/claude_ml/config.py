@@ -107,6 +107,7 @@ class Settings:
     size_multiplier_trend: float = float(_env("SIZE_MULTIPLIER_TREND", "1.0"))
 
     # === Exit Configuration ===
+    min_atr_pct_for_entry: float = float(_env("MIN_ATR_PCT_FOR_ENTRY", "0.5"))  # Minimum ATR% to allow entries
     take_profit_atr_multiplier: float = float(_env("TAKE_PROFIT_ATR_MULTIPLIER", "2.5"))
     stop_loss_atr_multiplier: float = float(_env("STOP_LOSS_ATR_MULTIPLIER", "2.0"))
     trailing_trigger_atr_multiplier: float = float(_env("TRAILING_TRIGGER_ATR_MULTIPLIER", "0.5"))

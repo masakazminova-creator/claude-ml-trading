@@ -748,6 +748,12 @@ class RuntimeEngine:
 
         # Calculate position size via risk manager (for ENTER decisions only)
         if decision and decision.action.upper().startswith("ENTER"):
+            # CHECK IF ATR IS TOO LOW FOR ENTRY (low volatility filter)
+            atr_pct_value = atr_ratio * 100  # Convert ratio to percentage
+            if atr_pct_value < self.settings.min_atr_pct_for_entry:
+                logger.info(f"[{symbol}] ⏸️ ATR too low ({atr_pct_value:.2f}% < {self.settings.min_atr_pct_for_entry}%), skipping entry")
+                return  # Skip entry when volatility is too low
+
             # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
             existing_position = self.conn.execute("""
                 SELECT id FROM paper_trades
