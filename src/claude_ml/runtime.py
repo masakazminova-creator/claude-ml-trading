@@ -134,46 +134,43 @@ class RuntimeEngine:
                 FROM paper_trades
                 WHERE status = 'open'
             """)
-        except Exception as e:
-            logger.error(f"Failed to query open positions: {e}")
-            print(f"DEBUG: Query failed: {e}")
-            return
 
-        restored_count = 0
-        for row in cursor.fetchall():
-            trade_id, symbol, side, entry_price, payload_json = row
-            payload = json.loads(payload_json) if payload_json else {}
+            restored_count = 0
+            for row in cursor.fetchall():
+                trade_id, symbol, side, entry_price, payload_json = row
+                payload = json.loads(payload_json) if payload_json else {}
 
-            # Extract ATR from payload or use default (stored as ratio, not percentage)
-            atr_ratio = float(payload.get('atr_pct', 0.0025))
-            atr = atr_ratio * entry_price  # Convert ratio to absolute value
+                # Extract ATR from payload or use default (stored as ratio, not percentage)
+                atr_ratio = float(payload.get('atr_pct', 0.0025))
+                atr = atr_ratio * entry_price  # Convert ratio to absolute value
 
-            # Calculate TP/SL levels (same as when position was created)
-            tp_level = entry_price + (atr * 2.5) if side == "long" else entry_price - (atr * 2.5)
-            sl_level = entry_price - (atr * 2.0) if side == "long" else entry_price + (atr * 2.0)
+                # Calculate TP/SL levels (same as when position was created)
+                tp_level = entry_price + (atr * 2.5) if side == "long" else entry_price - (atr * 2.5)
+                sl_level = entry_price - (atr * 2.0) if side == "long" else entry_price + (atr * 2.0)
 
-            # Create trailing stop state
-            trailing_state = create_trailing_stop(
-                symbol=symbol,
-                side=side,
-                entry_price=entry_price,
-                atr=atr,
-                tp_level=tp_level,
-                sl_level=sl_level,
-                trigger_mult=(abs(tp_level - entry_price)) / atr,
-                stop_mult=1.5,
-            )
+                # Create trailing stop state
+                trailing_state = create_trailing_stop(
+                    symbol=symbol,
+                    side=side,
+                    entry_price=entry_price,
+                    atr=atr,
+                    tp_level=tp_level,
+                    sl_level=sl_level,
+                    trigger_mult=(abs(tp_level - entry_price)) / atr,
+                    stop_mult=1.5,
+                )
 
-            self.trailing_stops[symbol] = trailing_state
-            logger.info(f"  Restored trailing stop for {symbol} #{trade_id} ({side}, entry={entry_price:.2f})")
-            restored_count += 1
+                self.trailing_stops[symbol] = trailing_state
+                logger.info(f"  Restored trailing stop for {symbol} #{trade_id} ({side}, entry={entry_price:.2f})")
+                restored_count += 1
 
-        if restored_count > 0:
-            logger.info(f"Restored {restored_count} trailing stop(s) from database")
-            print(f"DEBUG: Restored {restored_count} trailing stops")
-        else:
-            logger.info("No open positions to restore trailing stops for")
-            print("DEBUG: No open positions found")
+            if restored_count > 0:
+                logger.info(f"Restored {restored_count} trailing stop(s) from database")
+                print(f"DEBUG: Restored {restored_count} trailing stops")
+            else:
+                logger.info("No open positions to restore trailing stops for")
+                print("DEBUG: No open positions found")
+
         except Exception as e:
             logger.error(f"Failed to restore trailing stops: {e}", exc_info=True)
             print(f"DEBUG: Restore failed with error: {e}")
