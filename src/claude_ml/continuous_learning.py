@@ -184,7 +184,7 @@ class ContinuousLearningEngine:
             VALUES (?, ?, ?, ?)
         """, (
             metrics.last_updated,
-            "performance_check",
+            "ok",  # Changed from "performance_check" to "ok"
             0,
             json.dumps({
                 "trades": metrics.total_trades,
