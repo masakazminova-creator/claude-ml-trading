@@ -109,6 +109,9 @@ class RuntimeEngine:
         # Trailing stops tracker (symbol -> TrailingStopState)
         self.trailing_stops: Dict[str, TrailingStopState] = {}
 
+        # Restore trailing stops from database on startup
+        self._restore_trailing_stops_from_db()
+
         # Circuit breaker state
         self.trading_paused = False
         self.pause_reason = ""
@@ -118,6 +121,51 @@ class RuntimeEngine:
         self.error_streak = 0
         self.last_candle_time = {}
         self.stage_tracker = {}  # symbol -> current stage ('stage_1' or 'stage_2')
+
+    def _restore_trailing_stops_from_db(self) -> None:
+        """Restore trailing stops for open positions from database on startup."""
+        logger.info("Restoring trailing stops from database...")
+
+        # Get all open positions
+        cursor = self.conn.execute("""
+            SELECT id, symbol, side, entry_price, payload_json
+            FROM paper_trades
+            WHERE status = 'open'
+        """)
+
+        restored_count = 0
+        for row in cursor.fetchall():
+            trade_id, symbol, side, entry_price, payload_json = row
+            payload = json.loads(payload_json) if payload_json else {}
+
+            # Extract ATR from payload or use default
+            atr_pct = float(payload.get('atr_pct', 0.0025))
+            atr = atr_pct * entry_price / 100
+
+            # Calculate TP/SL levels (same as when position was created)
+            tp_level = entry_price + (atr * 2.5) if side == "long" else entry_price - (atr * 2.5)
+            sl_level = entry_price - (atr * 2.0) if side == "long" else entry_price + (atr * 2.0)
+
+            # Create trailing stop state
+            trailing_state = create_trailing_stop(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                atr=atr,
+                tp_level=tp_level,
+                sl_level=sl_level,
+                trigger_mult=(abs(tp_level - entry_price)) / atr,
+                stop_mult=1.5,
+            )
+
+            self.trailing_stops[symbol] = trailing_state
+            logger.info(f"  Restored trailing stop for {symbol} #{trade_id} ({side}, entry={entry_price:.2f})")
+            restored_count += 1
+
+        if restored_count > 0:
+            logger.info(f"Restored {restored_count} trailing stop(s) from database")
+        else:
+            logger.info("No open positions to restore trailing stops for")
 
     def _load_early_model(self) -> Optional[EarlySignalModel]:
         """Load early signal model."""
