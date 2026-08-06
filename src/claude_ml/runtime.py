@@ -33,6 +33,8 @@ from .continuous_learning import ContinuousLearningEngine
 from .adaptive_thresholds import AdaptiveThresholdEngine
 from .signal_audit import SignalAuditEngine
 from .trailing_stop import TrailingStopState, create_trailing_stop, update_trailing_stop, check_trailing_stop_exit, check_fixed_sl_exit
+from .feature_importance import OnlineFeatureSelector
+from .multi_timeframe import MultiTimeframeAnalyzer
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
 from .models.momentum import MomentumModel
@@ -69,6 +71,11 @@ class RuntimeEngine:
             settings.telegram_bot_token,
             settings.telegram_chat_id
         )
+
+        # Initialize multi-timeframe analyzer (Phase 3) - one per symbol
+        self.mtf_analyzers: Dict[str, MultiTimeframeAnalyzer] = {}
+        for symbol in settings.symbols:
+            self.mtf_analyzers[symbol] = MultiTimeframeAnalyzer(symbol=symbol)
 
         # Load models (if available)
         self.early_model = self._load_early_model()
@@ -116,6 +123,14 @@ class RuntimeEngine:
         self.trading_paused = False
         self.pause_reason = ""
         self.emergency_stop_triggered = False
+
+        # Initialize online feature selector (Phase 2)
+        self.feature_selector = OnlineFeatureSelector(
+            rolling_window=50,
+            min_correlation=0.05,
+            max_noise_ratio=2.0,
+            update_interval_bars=10,
+        )
 
         # Runtime state
         self.error_streak = 0
@@ -506,6 +521,17 @@ class RuntimeEngine:
             logger.error(f"Failed to classify regime for {symbol}: {e}", exc_info=True)
             return
 
+        # Update online feature importance (Phase 2)
+        try:
+            active_features = self.feature_selector.update_feature_importance(
+                df=featured,
+                target_column="long_target",
+            )
+            if active_features:
+                logger.debug(f"[{symbol}] Active features: {len(active_features)}")
+        except Exception as e:
+            logger.warning(f"Feature selector update failed for {symbol}: {e}")
+
         # Check if candle is fresh
         latest_ts = featured["ts"].iloc[-1]
         if not self._is_candle_fresh(latest_ts, symbol):
@@ -753,6 +779,20 @@ class RuntimeEngine:
             if atr_pct_value < self.settings.min_atr_pct_for_entry:
                 logger.info(f"[{symbol}] ⏸️ ATR too low ({atr_pct_value:.2f}% < {self.settings.min_atr_pct_for_entry}%), skipping entry")
                 return  # Skip entry when volatility is too low
+
+            # Phase 3: CHECK MULTI-TIMEFRAME ALIGNMENT
+            try:
+                mtf_analyzer = self.mtf_analyzers.get(symbol)
+                if mtf_analyzer:
+                    alignment = mtf_analyzer.check_alignment()
+                    if not alignment.entry_allowed:
+                        logger.info(f"[{symbol}] ⏸️ Multi-timeframe blocked: {alignment.reasoning}")
+                        return  # Skip entry when timeframes don't align
+                    else:
+                        logger.info(f"[{symbol}] ✅ MTF aligned: {alignment.reasoning} (score={alignment.alignment_score:.2f})")
+            except Exception as e:
+                logger.warning(f"Multi-timeframe check failed for {symbol}: {e}")
+                # Allow trade to proceed if MTF check fails (don't block on errors)
 
             # CHECK IF POSITION ALREADY EXISTS - PREVENT DUPLICATE SIGNALS
             existing_position = self.conn.execute("""
