@@ -604,23 +604,25 @@ class EnsembleEngine:
 
         # === MARKET STRUCTURE AWARENESS (Phase 4) ===
 
-        # KEY LEVEL PROXIMITY - Critical for avoiding bad entries at extremes
-        if context.key_level_proximity == "at_resistance" and side == "long":
-            score *= 0.70  # Strong penalty for longs at resistance
-        elif context.key_level_proximity == "at_support" and side == "short":
-            score *= 0.70  # Strong penalty for shorts at support
-
-        # STRUCTURE TYPE ADJUSTMENT - Respect market geometry
+        # KEY LEVEL PROXIMITY + STRUCTURE COMBINED - Avoid bad entries with smart adjustments
         if context.structure_type == "range":
-            # In ranges, fade extremes (buy low, sell high)
-            if side == "long" and context.key_level_proximity == "at_resistance":
-                score *= 0.80  # Additional penalty - buying at range top
-            elif side == "short" and context.key_level_proximity == "at_support":
-                score *= 0.80  # Additional penalty - selling at range bottom
-            elif side == "long" and context.key_level_proximity == "at_support":
-                score *= 1.15  # Bonus - buying at range bottom (mean reversion)
-            elif side == "short" and context.key_level_proximity == "at_resistance":
-                score *= 1.15  # Bonus - selling at range top (mean reversion)
+            # In ranges, use mean reversion logic
+            if context.key_level_proximity == "at_resistance":
+                if side == "long":
+                    score *= 0.60  # Strong penalty - buying at range top
+                else:  # short
+                    score *= 1.20  # Bonus - selling at range top (correct direction)
+            elif context.key_level_proximity == "at_support":
+                if side == "short":
+                    score *= 0.60  # Strong penalty - selling at range bottom
+                else:  # long
+                    score *= 1.20  # Bonus - buying at range bottom (correct direction)
+        else:
+            # In trending markets, key levels still matter but less extreme
+            if context.key_level_proximity == "at_resistance" and side == "long":
+                score *= 0.75  # Moderate penalty for longs at resistance
+            elif context.key_level_proximity == "at_support" and side == "short":
+                score *= 0.75  # Moderate penalty for shorts at support
 
         # TREND STRUCTURE RESPECT - Don't fight clear trends
         elif context.structure_type == "HH_HL":  # Uptrend

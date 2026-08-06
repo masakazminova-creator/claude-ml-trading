@@ -99,13 +99,36 @@ class MultiTimeframeAnalyzer:
         return self._calculate_alignment(valid_timeframes)
 
     def _analyze_timeframe(self, interval: str) -> Optional[TimeframeAnalysis]:
-        """Analyze a single timeframe."""
-        try:
-            df = self.collector.fetch_history(
-                symbol=self.symbol,
-                interval=interval,
-                lookback_bars=50,
-            )
+        """Analyze a single timeframe with timeout protection."""
+        result = [None]
+        error = [None]
+
+        def fetch_with_timeout():
+            try:
+                df = self.collector.fetch_history(
+                    symbol=self.symbol,
+                    interval=interval,
+                    lookback_bars=50,
+                )
+                result[0] = df
+            except Exception as e:
+                error[0] = e
+
+        import threading
+        thread = threading.Thread(target=fetch_with_timeout)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=15)  # 15 second timeout
+
+        if thread.is_alive():
+            logger.warning(f"Timeframe {interval} analysis timed out")
+            return None
+
+        if error[0]:
+            logger.warning(f"Timeframe {interval} analysis failed: {error[0]}")
+            return None
+
+        df = result[0]
 
             if df.empty or len(df) < 30:
                 return None
