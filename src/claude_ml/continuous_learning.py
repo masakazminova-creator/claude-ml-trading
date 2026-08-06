@@ -102,13 +102,13 @@ class ContinuousLearningEngine:
         self.min_trades_for_check = 50       # Need at least 50 trades to check
 
         # Adaptive retraining config
-        self.base_retrain_interval_trades = 100  # Base interval
-        self.min_retrain_interval_trades = 20    # Minimum in high volatility
-        self.max_retrain_interval_trades = 200   # Maximum in low volatility
+        self.base_retrain_interval_trades = 50  # Base interval (was 100, check more often)
+        self.min_retrain_interval_trades = 10    # Minimum in high volatility (was 20)
+        self.max_retrain_interval_trades = 100   # Maximum in low volatility (was 200)
 
-        self.base_training_lookback_bars = 2000  # Base lookback (~21 days on 15m)
-        self.min_training_lookback_bars = 500    # Minimum in fast markets (~5 days)
-        self.max_training_lookback_bars = 5000   # Maximum in stable markets (~52 days)
+        self.base_training_lookback_bars = 1000  # Base lookback (~10 days on 15m, was 2000)
+        self.min_training_lookback_bars = 300    # Minimum in fast markets (~3 days, was 500)
+        self.max_training_lookback_bars = 3000   # Maximum in stable markets (~31 days, was 5000)
         self.training_lookback_bars = self.base_training_lookback_bars  # Initialize with base value
         self.retrain_interval_trades = self.base_retrain_interval_trades  # Initialize adaptive interval
 
@@ -307,11 +307,19 @@ class ContinuousLearningEngine:
 
         # Time-based retraining check (even with 0 trades)
         last_training_age_hours = self._get_model_age_hours()
-        max_age_hours = 48  # Retrain if models are older than 48 hours
+        max_age_hours = 4  # Retrain every 4 hours to adapt to market changes (was 48h)
 
         if last_training_age_hours is None or last_training_age_hours > max_age_hours:
             age_str = "unknown" if last_training_age_hours is None else f"{last_training_age_hours:.1f}h"
             return True, f"Time-based retrain: models are {age_str} old (max: {max_age_hours}h)"
+
+        # Check for rapid market regime change (every cycle)
+        if self._detect_regime_change():
+            return True, "Market regime changed - immediate retrain needed"
+
+        # Volatility spike detection (check every few bars)
+        if current_atr_pct and self._detect_volatility_spike(current_atr_pct):
+            return True, f"Volatility spike detected (ATR={current_atr_pct:.2f}%)"
 
         # Retrain on drift
         if drift.is_drifting:
@@ -407,6 +415,89 @@ class ContinuousLearningEngine:
 
         # Return age of oldest model
         return max(ages_hours) if ages_hours else None
+
+    def _detect_regime_change(self) -> bool:
+        """
+        Detect if market regime has changed significantly.
+
+        Compares current regime characteristics with last training period.
+        Returns True if significant change detected.
+        """
+        # TODO: Implement proper regime change detection
+        # For now, use simple heuristic based on recent performance
+        # If win rate dropped significantly in last 10 trades vs previous 50
+        try:
+            recent_10 = self.conn.execute("""
+                SELECT pnl_pct FROM paper_trades
+                WHERE status IN ('closed', 'shadow_closed') AND ABS(pnl_pct) > 0.01
+                ORDER BY id DESC LIMIT 10
+            """).fetchall()
+
+            if len(recent_10) < 5:
+                return False
+
+            recent_wr = sum(1 for r in recent_10 if float(r[0]) > 0) / len(recent_10) * 100
+
+            prev_50 = self.conn.execute("""
+                SELECT pnl_pct FROM paper_trades
+                WHERE status IN ('closed', 'shadow_closed') AND ABS(pnl_pct) > 0.01
+                ORDER BY id DESC LIMIT 50 OFFSET 10
+            """).fetchall()
+
+            if len(prev_50) < 20:
+                return False
+
+            prev_wr = sum(1 for r in prev_50 if float(r[0]) > 0) / len(prev_50) * 100
+
+            # Significant drop indicates regime change
+            wr_drop = prev_wr - recent_wr
+            return wr_drop > 15  # 15% drop suggests regime change
+
+        except Exception as e:
+            logger.warning(f"Regime change detection failed: {e}")
+            return False
+
+    def _detect_volatility_spike(self, current_atr_pct: float) -> bool:
+        """
+        Detect if volatility has spiked beyond normal range.
+
+        Args:
+            current_atr_pct: Current ATR as percentage
+
+        Returns:
+            True if volatility spike detected
+        """
+        # Get historical ATR values from recent trades
+        try:
+            cursor = self.conn.execute("""
+                SELECT payload_json FROM paper_trades
+                WHERE status IN ('closed', 'shadow_closed')
+                  AND payload_json IS NOT NULL
+                ORDER BY id DESC LIMIT 20
+            """)
+
+            atr_values = []
+            for row in cursor.fetchall():
+                if row[0]:
+                    import json
+                    payload = json.loads(row[0])
+                    atr = payload.get('atr_pct', None)
+                    if atr and atr > 0:
+                        atr_values.append(atr * 100)  # Convert ratio to percentage
+
+            if len(atr_values) < 5:
+                return False
+
+            avg_atr = sum(atr_values) / len(atr_values)
+            std_atr = (sum((x - avg_atr)**2 for x in atr_values) / len(atr_values)) ** 0.5
+
+            # Check if current ATR is more than 2 standard deviations above mean
+            z_score = (current_atr_pct - avg_atr) / std_atr if std_atr > 0 else 0
+            return z_score > 2.0  # More than 2 std devs = spike
+
+        except Exception as e:
+            logger.warning(f"Volatility spike detection failed: {e}")
+            return False
 
     def fetch_recent_data(self, symbol: str = "BTCUSDT", lookback_bars: Optional[int] = None) -> pd.DataFrame:
         """Fetch recent market data for retraining."""
