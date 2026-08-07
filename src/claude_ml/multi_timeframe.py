@@ -130,57 +130,57 @@ class MultiTimeframeAnalyzer:
 
         df = result[0]
 
-            if df.empty or len(df) < 30:
-                return None
+        if df.empty or len(df) < 30:
+            return None
 
-            # Calculate indicators
-            close = df['close']
-            high = df['high']
-            low = df['low']
+        # Calculate indicators
+        close = df['close']
+        high = df['high']
+        low = df['low']
 
-            # EMAs
-            ema_8 = close.rolling(8).mean()
-            ema_21 = close.rolling(21).mean()
+        # EMAs
+        ema_8 = close.rolling(8).mean()
+        ema_21 = close.rolling(21).mean()
 
-            # RSI
-            delta = close.diff()
-            gain = delta.where(delta > 0, 0).rolling(14).mean()
-            loss = -delta.where(delta < 0, 0).rolling(14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs)).iloc[-1]
+        # RSI
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0).rolling(14).mean()
+        loss = -delta.where(delta < 0, 0).rolling(14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs)).iloc[-1]
 
-            # Current values
-            current_close = close.iloc[-1]
-            ema_diff = float((ema_8.iloc[-1] - ema_21.iloc[-1]) / ema_21.iloc[-1] * 100)
+        # Current values
+        current_close = close.iloc[-1]
+        ema_diff = float((ema_8.iloc[-1] - ema_21.iloc[-1]) / ema_21.iloc[-1] * 100)
 
-            # Trend determination
-            if ema_diff > 0.5:
-                trend = "bullish"
-                trend_strength = min(abs(ema_diff) / 2.0, 1.0)
-            elif ema_diff < -0.5:
-                trend = "bearish"
-                trend_strength = min(abs(ema_diff) / 2.0, 1.0)
-            else:
-                trend = "neutral"
-                trend_strength = 1.0 - abs(ema_diff) / 0.5
+        # Trend determination
+        if ema_diff > 0.5:
+            trend = "bullish"
+            trend_strength = min(abs(ema_diff) / 2.0, 1.0)
+        elif ema_diff < -0.5:
+            trend = "bearish"
+            trend_strength = min(abs(ema_diff) / 2.0, 1.0)
+        else:
+            trend = "neutral"
+            trend_strength = 1.0 - abs(ema_diff) / 0.5
 
-            # Momentum
-            recent_ret = float((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5] * 100)
-            if recent_ret > 1.0:
-                momentum = "positive"
-            elif recent_ret < -1.0:
-                momentum = "negative"
-            else:
-                momentum = "neutral"
+        # Momentum
+        recent_ret = float((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5] * 100)
+        if recent_ret > 1.0:
+            momentum = "positive"
+        elif recent_ret < -1.0:
+            momentum = "negative"
+        else:
+            momentum = "neutral"
 
-            return TimeframeAnalysis(
-                timeframe=f"{interval}m",
-                trend=trend,
-                trend_strength=trend_strength,
-                rsi=float(rsi),
-                ema_fast_vs_slow=ema_diff,
-                momentum=momentum,
-            )
+        return TimeframeAnalysis(
+            timeframe=f"{interval}m",
+            trend=trend,
+            trend_strength=trend_strength,
+            rsi=float(rsi),
+            ema_fast_vs_slow=ema_diff,
+            momentum=momentum,
+        )
 
         except Exception as e:
             logger.warning(f"Failed to analyze {interval}m timeframe: {e}")
