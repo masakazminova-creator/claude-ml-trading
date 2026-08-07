@@ -100,91 +100,92 @@ class MultiTimeframeAnalyzer:
 
     def _analyze_timeframe(self, interval: str) -> Optional[TimeframeAnalysis]:
         """Analyze a single timeframe with timeout protection."""
-        result = [None]
-        error = [None]
+        try:
+            result = [None]
+            error = [None]
 
-        def fetch_with_timeout():
-            try:
-                df = self.collector.fetch_history(
-                    symbol=self.symbol,
-                    interval=interval,
-                    lookback_bars=50,
-                )
-                result[0] = df
-            except Exception as e:
-                error[0] = e
+            def fetch_with_timeout():
+                try:
+                    df = self.collector.fetch_history(
+                        symbol=self.symbol,
+                        interval=interval,
+                        lookback_bars=50,
+                    )
+                    result[0] = df
+                except Exception as e:
+                    error[0] = e
 
-        import threading
-        thread = threading.Thread(target=fetch_with_timeout)
-        thread.daemon = True
-        thread.start()
-        thread.join(timeout=15)  # 15 second timeout
+            import threading
+            thread = threading.Thread(target=fetch_with_timeout)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=15)  # 15 second timeout
 
-        if thread.is_alive():
-            logger.warning(f"Timeframe {interval} analysis timed out")
+            if thread.is_alive():
+                logger.warning(f"Timeframe {interval} analysis timed out")
+                return None
+
+            if error[0]:
+                logger.warning(f"Timeframe {interval} analysis failed: {error[0]}")
+                return None
+
+            df = result[0]
+
+            if df.empty or len(df) < 30:
+                return None
+
+            # Calculate indicators
+            close = df['close']
+            high = df['high']
+            low = df['low']
+
+            # EMAs
+            ema_8 = close.rolling(8).mean()
+            ema_21 = close.rolling(21).mean()
+
+            # RSI
+            delta = close.diff()
+            gain = delta.where(delta > 0, 0).rolling(14).mean()
+            loss = -delta.where(delta < 0, 0).rolling(14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs)).iloc[-1]
+
+            # Current values
+            current_close = close.iloc[-1]
+            ema_diff = float((ema_8.iloc[-1] - ema_21.iloc[-1]) / ema_21.iloc[-1] * 100)
+
+            # Trend determination
+            if ema_diff > 0.5:
+                trend = "bullish"
+                trend_strength = min(abs(ema_diff) / 2.0, 1.0)
+            elif ema_diff < -0.5:
+                trend = "bearish"
+                trend_strength = min(abs(ema_diff) / 2.0, 1.0)
+            else:
+                trend = "neutral"
+                trend_strength = 1.0 - abs(ema_diff) / 0.5
+
+            # Momentum
+            recent_ret = float((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5] * 100)
+            if recent_ret > 1.0:
+                momentum = "positive"
+            elif recent_ret < -1.0:
+                momentum = "negative"
+            else:
+                momentum = "neutral"
+
+            return TimeframeAnalysis(
+                timeframe=f"{interval}m",
+                trend=trend,
+                trend_strength=trend_strength,
+                rsi=float(rsi),
+                ema_fast_vs_slow=ema_diff,
+                momentum=momentum,
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to analyze {interval}m timeframe: {e}")
             return None
-
-        if error[0]:
-            logger.warning(f"Timeframe {interval} analysis failed: {error[0]}")
-            return None
-
-        df = result[0]
-
-        if df.empty or len(df) < 30:
-            return None
-
-        # Calculate indicators
-        close = df['close']
-        high = df['high']
-        low = df['low']
-
-        # EMAs
-        ema_8 = close.rolling(8).mean()
-        ema_21 = close.rolling(21).mean()
-
-        # RSI
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = -delta.where(delta < 0, 0).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs)).iloc[-1]
-
-        # Current values
-        current_close = close.iloc[-1]
-        ema_diff = float((ema_8.iloc[-1] - ema_21.iloc[-1]) / ema_21.iloc[-1] * 100)
-
-        # Trend determination
-        if ema_diff > 0.5:
-            trend = "bullish"
-            trend_strength = min(abs(ema_diff) / 2.0, 1.0)
-        elif ema_diff < -0.5:
-            trend = "bearish"
-            trend_strength = min(abs(ema_diff) / 2.0, 1.0)
-        else:
-            trend = "neutral"
-            trend_strength = 1.0 - abs(ema_diff) / 0.5
-
-        # Momentum
-        recent_ret = float((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5] * 100)
-        if recent_ret > 1.0:
-            momentum = "positive"
-        elif recent_ret < -1.0:
-            momentum = "negative"
-        else:
-            momentum = "neutral"
-
-        return TimeframeAnalysis(
-            timeframe=f"{interval}m",
-            trend=trend,
-            trend_strength=trend_strength,
-            rsi=float(rsi),
-            ema_fast_vs_slow=ema_diff,
-            momentum=momentum,
-        )
-
-    except Exception as e:
-        logger.warning(f"Failed to analyze {interval}m timeframe: {e}")
-        return None
 
     def _calculate_alignment(
         self,
