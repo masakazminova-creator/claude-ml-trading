@@ -625,11 +625,11 @@ class EnsembleEngine:
                 score *= 0.75  # Moderate penalty for shorts at support
 
         # TREND STRUCTURE RESPECT - Don't fight clear trends
-        elif context.structure_type == "HH_HL":  # Uptrend
+        if context.structure_type == "HH_HL":  # Uptrend
             if side == "short":
                 score *= 0.85  # Penalty for counter-trend shorts in uptrend
 
-        elif context.structure_type == "LH_LL":  # Downtrend
+        if context.structure_type == "LH_LL":  # Downtrend
             if side == "long":
                 score *= 0.85  # Penalty for counter-trend longs in downtrend
 
