@@ -182,9 +182,9 @@ class MultiTimeframeAnalyzer:
             momentum=momentum,
         )
 
-        except Exception as e:
-            logger.warning(f"Failed to analyze {interval}m timeframe: {e}")
-            return None
+    except Exception as e:
+        logger.warning(f"Failed to analyze {interval}m timeframe: {e}")
+        return None
 
     def _calculate_alignment(
         self,
