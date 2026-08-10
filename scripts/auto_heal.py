@@ -42,7 +42,7 @@ class AutoHealMonitor:
         self.fixes_applied = 0
 
     def check_database_health(self):
-        """Check if database is accessible and has recent data."""
+        """Check if database is accessible and system is actively logging."""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -60,13 +60,27 @@ class AutoHealMonitor:
             """)
             state_count = cursor.fetchone()[0]
 
+            # CRITICAL CHECK: Verify system is logging decisions
+            # Check if there are any signals in the last 30 minutes
+            cursor.execute("""
+                SELECT COUNT(*) FROM signal_audit_log
+                WHERE ts > datetime('now', '-30 minutes')
+            """)
+            recent_signals = cursor.fetchone()[0]
+
             conn.close()
 
             if state_count == 0:
                 logger.warning("Runtime state table is empty!")
                 return False
 
-            logger.info(f"Database OK (recent trades: {recent_trades}, states: {state_count})")
+            # If no recent signals, system might be stuck
+            if recent_signals == 0:
+                logger.warning("NO RECENT SIGNALS - system may be stuck!")
+                logger.warning("System should be logging decisions every 15 seconds")
+                return False
+
+            logger.info(f"Database OK (trades: {recent_trades}, signals: {recent_signals}, states: {state_count})")
             return True
 
         except Exception as e:
@@ -74,23 +88,44 @@ class AutoHealMonitor:
             return False
 
     def check_container_health(self):
-        """Check if Docker containers are running."""
+        """Check if Docker containers are running and healthy."""
         try:
             import subprocess
-            result = subprocess.run(
-                ["docker-compose", "ps"],
-                cwd="/opt/claude-ml-trading",
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
 
-            if "Up" not in result.stdout:
-                logger.warning("Some containers are not running!")
-                return False
+            # Check each container individually
+            containers = ["claude-ml-bot", "claude-ml-telegram-bot"]
+            all_healthy = True
 
-            logger.info("All containers healthy")
-            return True
+            for container in containers:
+                result = subprocess.run(
+                    ["docker", "inspect", "--format={{.State.Running}}", container],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd="/opt/claude-ml-trading"
+                )
+
+                is_running = result.stdout.strip() == "true"
+
+                if not is_running:
+                    logger.warning(f"Container {container} is NOT running!")
+                    all_healthy = False
+
+                    # Try to restart it
+                    logger.info(f"Attempting to restart {container}...")
+                    subprocess.run(
+                        ["docker", "restart", container],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        cwd="/opt/claude-ml-trading"
+                    )
+                    self.fixes_applied += 1
+
+            if all_healthy:
+                logger.info("All containers healthy and running")
+
+            return all_healthy
 
         except Exception as e:
             logger.error(f"Container check failed: {e}")
@@ -135,18 +170,28 @@ class AutoHealMonitor:
         logger.info("Running auto-fix routines...")
 
         try:
-            # Fix 1: Restart containers if unhealthy
-            if not self.check_container_health():
-                logger.info("Attempting container restart...")
+            # Fix 1: Check container health (enhanced)
+            container_healthy = self.check_container_health()
+
+            # Fix 2: Check database and signal activity
+            db_healthy = self.check_database_health()
+
+            # If containers are up but no signals, restart main bot
+            if container_healthy and not db_healthy:
+                logger.warning("Containers running but no signals detected!")
+                logger.info("Restarting claude-ml-bot to restore operation...")
                 import subprocess
                 subprocess.run(
-                    ["docker-compose", "restart"],
-                    cwd="/opt/claude-ml-trading",
-                    timeout=30
+                    ["docker", "restart", "claude-ml-bot"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    cwd="/opt/claude-ml-trading"
                 )
+                logger.info("Container restarted successfully")
                 self.fixes_applied += 1
 
-            # Fix 2: Clean old logs if disk is low
+            # Fix 3: Clean old logs if disk is low
             total, used, free = 0, 0, 0
             import shutil
             total, used, free = shutil.disk_usage("/opt/claude-ml-trading")
@@ -157,7 +202,7 @@ class AutoHealMonitor:
                     log_file.unlink()
                 self.fixes_applied += 1
 
-            # Fix 3: Reset error streak if too high
+            # Fix 4: Reset error streak if too high
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("""
