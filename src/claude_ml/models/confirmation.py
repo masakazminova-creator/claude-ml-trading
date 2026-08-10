@@ -163,8 +163,8 @@ class ConfirmationModel:
         available_features = [f for f in CONFIRMATION_FEATURES if f in df.columns]
         ready = df.dropna(subset=available_features + [target_column]).reset_index(drop=True)
 
-        if len(ready) < 1000:
-            raise RuntimeError(f"Not enough data for {side} confirmation model (need 1000+, got {len(ready)})")
+        if len(ready) < 500:
+            raise RuntimeError(f"Not enough data for {side} confirmation model (need 500+, got {len(ready)})")
 
         # Split
         split_idx = max(500, int(len(ready) * train_split))
