@@ -60,13 +60,13 @@ class AutoHealMonitor:
             """)
             state_count = cursor.fetchone()[0]
 
-            # CRITICAL CHECK: Verify system is logging decisions
-            # Check if there are any signals in the last 30 minutes
+            # CRITICAL CHECK: Verify system is actively running
+            # Check health_log for recent entries (every poll cycle logs health)
             cursor.execute("""
-                SELECT COUNT(*) FROM signal_audit_log
-                WHERE ts > datetime('now', '-30 minutes')
+                SELECT COUNT(*) FROM health_log
+                WHERE ts > datetime('now', '-5 minutes')
             """)
-            recent_signals = cursor.fetchone()[0]
+            recent_health = cursor.fetchone()[0]
 
             conn.close()
 
@@ -74,10 +74,10 @@ class AutoHealMonitor:
                 logger.warning("Runtime state table is empty!")
                 return False
 
-            # If no recent signals, system might be stuck
-            if recent_signals == 0:
-                logger.warning("NO RECENT SIGNALS - system may be stuck!")
-                logger.warning("System should be logging decisions every 15 seconds")
+            # If no recent health logs, system might be stuck
+            if recent_health == 0:
+                logger.warning("NO RECENT HEALTH LOGS - system may be stuck!")
+                logger.warning("System should be logging health every poll cycle")
                 return False
 
             logger.info(f"Database OK (trades: {recent_trades}, signals: {recent_signals}, states: {state_count})")
