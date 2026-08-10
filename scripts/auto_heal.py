@@ -80,7 +80,7 @@ class AutoHealMonitor:
                 logger.warning("System should be logging health every poll cycle")
                 return False
 
-            logger.info(f"Database OK (trades: {recent_trades}, signals: {recent_signals}, states: {state_count})")
+            logger.info(f"Database OK (trades: {recent_trades}, health_logs: {recent_health}, states: {state_count})")
             return True
 
         except Exception as e:
