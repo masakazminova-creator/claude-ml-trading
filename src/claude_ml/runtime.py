@@ -596,12 +596,28 @@ class RuntimeEngine:
                     import requests
                     pnl_sign = "+" if net_pnl_pct >= 0 else ""
                     pnl_emoji = "🔴"  # Red circle for loss
+
+                    # Get trade ID and entry time from database
+                    trade_info = self.conn.execute("""
+                        SELECT id, entry_ts FROM paper_trades
+                        WHERE symbol = ? AND status = 'closed'
+                        ORDER BY id DESC LIMIT 1
+                    """, (symbol,)).fetchone()
+
+                    trade_id_close = trade_info[0] if trade_info else 'N/A'
+                    entry_time_db = trade_info[1] if trade_info else None
+                    entry_time_str = str(entry_time_db)[:19] if entry_time_db else 'N/A'
+                    exit_time_str = latest_ts.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+
                     exit_msg = (
                         f"{pnl_emoji} *STOP LOSS HIT*\n\n"
+                        f"📋 *Trade ID: #{trade_id_close}*\n"
                         f"Symbol: `{symbol}`\n"
                         f"Side: *{trailing_state.side.upper()}*\n"
                         f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
                         f"Exit Price: `${close_price:.2f}`\n"
+                        f"⏰ Entry Time: `{entry_time_str}`\n"
+                        f"⏰ Exit Time: `{exit_time_str}`\n\n"
                         f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
                         f"Costs: `-{cost_pct:.3f}%`\n"
                         f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
@@ -668,12 +684,28 @@ class RuntimeEngine:
                     import requests
                     pnl_sign = "+" if net_pnl_pct >= 0 else ""
                     pnl_emoji = "🟢" if net_pnl_pct > 0 else "🔴"
+
+                    # Get trade ID and entry time from database
+                    trade_info = self.conn.execute("""
+                        SELECT id, entry_ts FROM paper_trades
+                        WHERE symbol = ? AND status = 'closed'
+                        ORDER BY id DESC LIMIT 1
+                    """, (symbol,)).fetchone()
+
+                    trade_id_close = trade_info[0] if trade_info else 'N/A'
+                    entry_time_db = trade_info[1] if trade_info else None
+                    entry_time_str = str(entry_time_db)[:19] if entry_time_db else 'N/A'
+                    exit_time_str = latest_ts.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+
                     exit_msg = (
                         f"{pnl_emoji} *TRADE CLOSED*\n\n"
+                        f"📋 *Trade ID: #{trade_id_close}*\n"
                         f"Symbol: `{symbol}`\n"
                         f"Side: *{trailing_state.side.upper()}*\n"
                         f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
                         f"Exit Price: `${close_price:.2f}`\n"
+                        f"⏰ Entry Time: `{entry_time_str}`\n"
+                        f"⏰ Exit Time: `{exit_time_str}`\n\n"
                         f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
                         f"Costs: `-{cost_pct:.3f}%`\n"
                         f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
@@ -849,8 +881,9 @@ class RuntimeEngine:
                 None, None,  # No fixed TP/SL - will use 0 as default
                 json.dumps(payload)
             ))
+            trade_id = self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            logger.info(f"[{symbol}] Paper trade created - trailing stop exit strategy")
+            logger.info(f"[{symbol}] Paper trade #{trade_id} created - trailing stop exit strategy")
 
             # Create ATR-based trailing stop that activates AT TAKE PROFIT level
             tp_level = risk_result.take_profit_price if risk_result.take_profit_price else close_price + (atr * 2.5)
@@ -871,11 +904,14 @@ class RuntimeEngine:
 
             # Send Telegram notification for entry
             try:
+                entry_time_str = latest_ts.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
                 entry_msg = (
                     f"🔔 *NEW TRADE ENTRY*\n\n"
+                    f"📋 *Trade ID: #{trade_id}*\n"
                     f"Symbol: `{symbol}`\n"
                     f"Side: *{decision.side.upper()}*\n"
                     f"Entry Price: `${close_price:.2f}`\n"
+                    f"⏰ Entry Time: `{entry_time_str}`\n\n"
                     f"Confidence: `{decision.confidence:.0f}%`\n"
                     f"Position Size: `{risk_result.adjusted_size_pct:.1f}%`\n\n"
                     f"Take Profit: `${risk_result.take_profit_price:.2f}`\n"
