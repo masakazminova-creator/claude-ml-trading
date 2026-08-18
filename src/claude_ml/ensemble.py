@@ -646,6 +646,16 @@ class EnsembleEngine:
             if context.structure_type == "range":
                 score *= 1.10  # Low vol + range = good for mean reversion
 
+        # ATR BREAKOUT DETECTION (NEW)
+        # Low ATR + developing structure = potential breakout setup
+        # Low volatility often precedes strong directional moves
+        if context.vol_regime == "low" and context.structure_type != "range":
+            # Compressed volatility + trending structure = breakout preparation
+            score *= 1.12  # Bonus for breakout setup
+        elif context.vol_regime == "low" and context.trend_quality == "developing":
+            # Low vol + developing trend = building momentum
+            score *= 1.08
+
         # LIQUIDITY CHECK - Avoid trading in thin markets
         if context.liquidity_condition == "thin":
             score *= 0.90  # Reduce conviction when liquidity is poor

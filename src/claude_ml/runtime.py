@@ -36,6 +36,7 @@ from .trailing_stop import TrailingStopState, create_trailing_stop, update_trail
 from .feature_importance import OnlineFeatureSelector
 from .multi_timeframe import MultiTimeframeAnalyzer
 from .regime_models import ExpertRouter, RegimeClassification
+from .atr_percentile import ATRPercentileAnalyzer
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
 from .models.momentum import MomentumModel
@@ -135,6 +136,9 @@ class RuntimeEngine:
             max_noise_ratio=2.0,
             update_interval_bars=10,
         )
+
+        # Initialize ATR Percentile Analyzer (replaces absolute ATR filter)
+        self.atr_analyzer = ATRPercentileAnalyzer(window_size=200)
 
         # Runtime state
         self.error_streak = 0
@@ -818,11 +822,27 @@ class RuntimeEngine:
 
         # Calculate position size via risk manager (for ENTER decisions only)
         if decision and decision.action.upper().startswith("ENTER"):
-            # CHECK IF ATR IS TOO LOW FOR ENTRY (low volatility filter)
+            # NEW: RELATIVE ATR ANALYSIS (replaces absolute filter)
             atr_pct_value = atr_ratio * 100  # Convert ratio to percentage
-            if atr_pct_value < self.settings.min_atr_pct_for_entry:
-                logger.info(f"[{symbol}] ⏸️ ATR too low ({atr_pct_value:.2f}% < {self.settings.min_atr_pct_for_entry}%), skipping entry")
-                return  # Skip entry when volatility is too low
+            atr_result = self.atr_analyzer.analyze(symbol, atr_pct_value)
+
+            logger.info(f"[{symbol}] ATR: {atr_pct_value:.3f}% (percentile: {atr_result.percentile_30d:.1f}%, compressed: {atr_result.is_compressed}, breakout_setup: {atr_result.is_breakout_setup})")
+
+            # Skip only in EXTREME compression (bottom 10% of history)
+            if atr_result.recommended_action == 'skip':
+                logger.info(f"[{symbol}] ⏸️ ATR extreme compression (percentile {atr_result.percentile_30d:.1f}%), skipping entry")
+                return
+
+            # Apply ATR bonus to evidence score (breakout detection)
+            # This is the KEY improvement: catch breakouts from compression
+            if atr_result.is_breakout_setup:
+                # Boost confidence for breakout setups
+                decision.confidence = min(100.0, decision.confidence * atr_result.bonus_multiplier)
+                decision.position_size_pct = min(1.0, decision.position_size_pct * atr_result.bonus_multiplier)
+                logger.info(f"[{symbol}] ✅ Breakout setup detected! Confidence boosted x{atr_result.bonus_multiplier:.2f}")
+
+            # Also apply bonus at ensemble level if decision hasn't been finalized yet
+            # (This is handled inside ensemble.py via MarketContext)
 
             # Phase 3: CHECK MULTI-TIMEFRAME ALIGNMENT
             try:
