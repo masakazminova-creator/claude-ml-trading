@@ -45,6 +45,22 @@ from .models.momentum import MomentumModel
 logger = logging.getLogger(__name__)
 
 
+def format_time_moscow(ts_str):
+    """Convert UTC timestamp to Moscow time (UTC+3)."""
+    if not ts_str:
+        return 'N/A'
+    try:
+        from datetime import datetime, timezone, timedelta
+        # Parse ISO format string
+        utc_dt = datetime.fromisoformat(str(ts_str).replace('+00:00', ''))
+        # Convert to Moscow time (UTC+3)
+        moscow_tz = timezone(timedelta(hours=3))
+        moscow_dt = utc_dt.replace(tzinfo=timezone.utc).astimezone(moscow_tz)
+        return moscow_dt.strftime('%Y-%m-%d %H:%M:%S') + ' MSK'
+    except Exception as e:
+        return str(ts_str)[:19] + ' UTC'
+
+
 class RuntimeEngine:
     """Complete runtime with full ensemble and risk management."""
 
@@ -610,8 +626,8 @@ class RuntimeEngine:
 
                     trade_id_close = trade_info[0] if trade_info else 'N/A'
                     entry_time_db = trade_info[1] if trade_info else None
-                    entry_time_str = str(entry_time_db)[:19] if entry_time_db else 'N/A'
-                    exit_time_str = latest_ts.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+                    entry_time_str = format_time_moscow(entry_time_db)
+                    exit_time_str = format_time_moscow(latest_ts.isoformat())
 
                     exit_msg = (
                         f"{pnl_emoji} *STOP LOSS HIT*\n\n"
@@ -698,8 +714,8 @@ class RuntimeEngine:
 
                     trade_id_close = trade_info[0] if trade_info else 'N/A'
                     entry_time_db = trade_info[1] if trade_info else None
-                    entry_time_str = str(entry_time_db)[:19] if entry_time_db else 'N/A'
-                    exit_time_str = latest_ts.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+                    entry_time_str = format_time_moscow(entry_time_db)
+                    exit_time_str = format_time_moscow(latest_ts.isoformat())
 
                     exit_msg = (
                         f"{pnl_emoji} *TRADE CLOSED*\n\n"
@@ -924,7 +940,7 @@ class RuntimeEngine:
 
             # Send Telegram notification for entry
             try:
-                entry_time_str = latest_ts.strftime('%Y-%m-%d %H:%M:%S') + ' UTC'
+                entry_time_str = format_time_moscow(latest_ts.isoformat())
                 entry_msg = (
                     f"🔔 *NEW TRADE ENTRY*\n\n"
                     f"📋 *Trade ID: #{trade_id}*\n"

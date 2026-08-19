@@ -307,9 +307,21 @@ class TradingBot:
                 msg += f"Current Price: ${current_price_str}\n"
                 msg += f"PnL: `{pnl_sign}{pnl_pct:.3f}%` {pnl_emoji_char}\n\n"
 
-            # Entry time
-            entry_time = str(entry_ts)[:19] if entry_ts else 'N/A'
-            msg += f"⏰ *Время входа:* {entry_time}\n\n"
+            # Entry time (convert to Moscow time UTC+3)
+            if entry_ts:
+                try:
+                    from datetime import datetime, timezone, timedelta
+                    # Parse UTC timestamp
+                    utc_dt = datetime.fromisoformat(entry_ts.replace('+00:00', ''))
+                    # Convert to Moscow time (UTC+3)
+                    moscow_tz = timezone(timedelta(hours=3))
+                    moscow_dt = utc_dt.replace(tzinfo=timezone.utc).astimezone(moscow_tz)
+                    entry_time_msk = moscow_dt.strftime('%Y-%m-%d %H:%M:%S') + ' MSK'
+                except Exception as e:
+                    entry_time_msk = str(entry_ts)[:19] + ' UTC'
+            else:
+                entry_time_msk = 'N/A'
+            msg += f"⏰ *Время входа:* {entry_time_msk}\n\n"
 
             # Reasoning
             if reasoning:
