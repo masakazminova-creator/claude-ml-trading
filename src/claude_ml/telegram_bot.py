@@ -276,30 +276,36 @@ class TradingBot:
 
             conn.close()
 
-            # Format message
+            # Format message (escape special chars for Telegram Markdown)
             side_emoji = "🟢" if side == "long" else "🔴"
             side_str = side.upper()
+
+            # Escape dollar signs and other special chars
+            entry_price_str = f"{entry_price:,.2f}"
+            tp_level_str = f"{tp_level:,.2f}"
+            sl_level_str = f"{sl_level:,.2f}"
+            current_price_str = f"{current_price:,.2f}" if current_price else "N/A"
 
             msg = f"{side_emoji} *Текущая позиция #{trade_id}*\n\n"
             msg += f"*Symbol:* `{symbol}`\n"
             msg += f"*Side:* *{side_str}*\n"
-            msg += f"*Entry:* `${entry_price:,.2f}`\n"
+            msg += f"*Entry:* ${entry_price_str}\n"
             msg += f"*Confidence:* `{confidence*100:.1f}%`\n"
             msg += f"*Regime:* `{regime}`\n\n"
 
             # TP/SL info
             msg += f"🎯 *Уровни:*\n"
-            msg += f"Take Profit: `${tp_level:,.2f}`\n"
-            msg += f"Stop Loss: `${sl_level:,.2f}`\n"
+            msg += f"Take Profit: ${tp_level_str}\n"
+            msg += f"Stop Loss: ${sl_level_str}\n"
             msg += f"Exit Strategy: `{exit_strategy}`\n\n"
 
             # Current PnL
             if current_price is not None and pnl_pct is not None:
                 pnl_sign = "+" if pnl_pct >= 0 else ""
-                pnl_emoji = "🟢" if pnl_pct > 0 else "🔴"
+                pnl_emoji_char = "🟢" if pnl_pct > 0 else "🔴"
                 msg += f"📈 *Текущий статус:*\n"
-                msg += f"Current Price: `${current_price:,.2f}`\n"
-                msg += f"PnL: `{pnl_sign}{pnl_pct:.3f}%` {pnl_emoji}\n\n"
+                msg += f"Current Price: ${current_price_str}\n"
+                msg += f"PnL: `{pnl_sign}{pnl_pct:.3f}%` {pnl_emoji_char}\n\n"
 
             # Entry time
             entry_time = str(entry_ts)[:19] if entry_ts else 'N/A'
@@ -309,7 +315,9 @@ class TradingBot:
             if reasoning:
                 msg += f"💡 *Причина входа:*\n"
                 for i, reason in enumerate(reasoning[:3], 1):
-                    msg += f"{i}. {reason}\n"
+                    # Escape special Markdown chars in reasoning
+                    safe_reason = reason.replace('_', '\\_').replace('*', '\\*')
+                    msg += f"{i}. {safe_reason}\n"
 
             # Add refresh button
             keyboard = [
