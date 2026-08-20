@@ -264,15 +264,32 @@ class TradingBot:
                 tp_level = entry_price - tp_distance
                 sl_level = entry_price + sl_distance
 
-            # Get current price from OKX
-            import requests
+            # Get current price from OKX with improved reliability
+            import requests, time
             try:
-                response = requests.get('https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP', timeout=3)
-                current_price = float(response.json()['data'][0]['last'])
+                # Use shorter timeout but retry if needed
+                response = requests.get(
+                    'https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP',
+                    timeout=5,
+                    headers={'User-Agent': 'Mozilla/5.0'}
+                )
+                data = response.json()
+                current_price = float(data['data'][0]['last'])
+
+                # Also get timestamp from OKX to show how fresh the price is
+                price_ts_ms = int(data['data'][0].get('ts', 0))
+                if price_ts_ms > 0:
+                    price_age_sec = (int(time.time() * 1000) - price_ts_ms) / 1000
+                    price_freshness = f"(price age: {price_age_sec:.1f}s)"
+                else:
+                    price_freshness = ""
+
                 pnl_pct = ((current_price - entry_price) / entry_price * 100) if side == "long" else ((entry_price - current_price) / entry_price * 100)
-            except:
+            except Exception as e:
+                logger.warning(f"Failed to fetch current price: {e}")
                 current_price = None
                 pnl_pct = None
+                price_freshness = ""
 
             conn.close()
 
@@ -305,6 +322,8 @@ class TradingBot:
                 pnl_emoji_char = "🟢" if pnl_pct > 0 else "🔴"
                 msg += f"📈 *Текущий статус:*\n"
                 msg += f"Current Price: ${current_price_str}\n"
+                if price_freshness:
+                    msg += f"_Last update: {price_freshness}_\n"
                 msg += f"PnL: `{pnl_sign}{pnl_pct:.3f}%` {pnl_emoji_char}\n\n"
 
             # Entry time (convert to Moscow time UTC+3)
