@@ -849,8 +849,9 @@ class RuntimeEngine:
                 logger.info(f"[{symbol}] ⏸️ ATR extreme compression (percentile {atr_result.percentile_30d:.1f}%), skipping entry")
                 return
 
-            # NEW: Check signal_audit_log for resistance context (prevent bad entries like trade #6)
-            # If 2+ of last 3 signals show at_resistance, skip entry
+            # NEW: Check signal_audit_log for key level context (prevent bad entries)
+            # For LONG: skip if 2+ of last 3 signals show at_resistance
+            # For SHORT: skip if 2+ of last 3 signals show at_support
             try:
                 recent_signals = self.conn.execute("""
                     SELECT action_reason FROM signal_audit_log
@@ -858,13 +859,20 @@ class RuntimeEngine:
                     ORDER BY ts DESC LIMIT 3
                 """, (latest_ts.isoformat(),)).fetchall()
 
-                at_resistance_count = sum(1 for s in recent_signals if s[0] and 'at_resistance' in s[0])
+                if decision.side == "long":
+                    # Check for resistance (bad for long)
+                    bad_level_count = sum(1 for s in recent_signals if s[0] and 'at_resistance' in s[0])
+                    level_name = "resistance"
+                else:  # short
+                    # Check for support (bad for short)
+                    bad_level_count = sum(1 for s in recent_signals if s[0] and 'at_support' in s[0])
+                    level_name = "support"
 
-                if at_resistance_count >= 2:
-                    logger.info(f"[{symbol}] ⏸️ Resistance warning: {at_resistance_count}/3 recent signals show at_resistance, skipping entry")
+                if bad_level_count >= 2:
+                    logger.info(f"[{symbol}] ⏸️ Bad level warning: {bad_level_count}/3 recent signals show at_{level_name}, skipping {decision.side} entry")
                     return
             except Exception as e:
-                logger.warning(f"Failed to check signal_audit_log for resistance: {e}")
+                logger.warning(f"Failed to check signal_audit_log for bad levels: {e}")
                 # Allow trade to proceed if check fails
 
             # Apply ATR bonus to evidence score (breakout detection)
