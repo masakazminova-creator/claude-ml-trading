@@ -849,6 +849,24 @@ class RuntimeEngine:
                 logger.info(f"[{symbol}] ⏸️ ATR extreme compression (percentile {atr_result.percentile_30d:.1f}%), skipping entry")
                 return
 
+            # NEW: Check signal_audit_log for resistance context (prevent bad entries like trade #6)
+            # If 2+ of last 3 signals show at_resistance, skip entry
+            try:
+                recent_signals = self.conn.execute("""
+                    SELECT action_reason FROM signal_audit_log
+                    WHERE ts <= ? AND action LIKE '%enter%'
+                    ORDER BY ts DESC LIMIT 3
+                """, (latest_ts.isoformat(),)).fetchall()
+
+                at_resistance_count = sum(1 for s in recent_signals if s[0] and 'at_resistance' in s[0])
+
+                if at_resistance_count >= 2:
+                    logger.info(f"[{symbol}] ⏸️ Resistance warning: {at_resistance_count}/3 recent signals show at_resistance, skipping entry")
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to check signal_audit_log for resistance: {e}")
+                # Allow trade to proceed if check fails
+
             # Apply ATR bonus to evidence score (breakout detection)
             # This is the KEY improvement: catch breakouts from compression
             if atr_result.is_breakout_setup:
