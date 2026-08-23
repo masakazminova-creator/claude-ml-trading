@@ -170,5 +170,24 @@ class TestPositionSizing:
         assert result_high_conf.adjusted_size_pct > result_low_conf.adjusted_size_pct
 
 
+    def test_take_profit_capped_at_max_pct(self):
+        """TP (trailing-activation trigger) is capped at max_take_profit_pct.
+
+        A far ATR-based TP (2.5x here = 5%) would be hunted and often reversed
+        into a loss; the cap arms the trailing stop sooner at +0.80% / -0.80%.
+        """
+        long_result = self.risk_manager.calculate_position_size(
+            symbol="BTCUSDT", entry_price=50000.0, atr=1000.0,
+            regime="trend_up", model_confidence=0.75, side="long",
+        )
+        short_result = self.risk_manager.calculate_position_size(
+            symbol="BTCUSDT", entry_price=50000.0, atr=1000.0,
+            regime="trend_up", model_confidence=0.75, side="short",
+        )
+        # 0.80% of 50000 = 400 -> capped TP distance
+        assert abs(long_result.take_profit_price - 50400.0) < 0.01
+        assert abs(short_result.take_profit_price - 49600.0) < 0.01
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

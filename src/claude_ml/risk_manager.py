@@ -123,6 +123,12 @@ class RiskManager:
         # NEW STRATEGY: TP triggers trailing stop activation
         # Fixed TP acts as trigger, not exit - activates trailing stop when reached
         tp_distance = atr * self.settings.take_profit_atr_multiplier
+        # Cap the TP (trailing-activation trigger) at a max % of entry so the trailing
+        # stop arms sooner and locks in the move. A far TP (e.g. 1.3-1.5%) often goes
+        # unpicked: price gets within ~0.1% then reverses into a loss. Capping to 0.80%
+        # lets the trailing stop capture the maximum and close in profit above the cap.
+        max_tp_distance = entry_price * (self.settings.max_take_profit_pct / 100)
+        tp_distance = min(tp_distance, max_tp_distance)
         sl_distance = atr * self.settings.stop_loss_atr_multiplier
 
         if side == "long":

@@ -12,6 +12,7 @@ Usage:
 """
 
 import logging
+import os
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
@@ -255,6 +256,9 @@ class TradingBot:
             # Calculate TP/SL levels (using same logic as runtime)
             atr_value = entry_price * atr_pct
             tp_distance = atr_value * 2.5
+            # Cap TP at the same max % the runtime uses (trailing-activation trigger)
+            max_tp_distance = entry_price * (float(os.environ.get("MAX_TAKE_PROFIT_PCT", "0.80")) / 100)
+            tp_distance = min(tp_distance, max_tp_distance)
             sl_distance = atr_value * 2.0
 
             if side == "long":
