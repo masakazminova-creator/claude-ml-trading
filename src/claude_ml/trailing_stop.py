@@ -155,13 +155,22 @@ def update_trailing_stop(
 def check_fixed_sl_exit(
     state: TrailingStopState,
     current_price: float,
+    bar_low: Optional[float] = None,
+    bar_high: Optional[float] = None,
 ) -> tuple[bool, str]:
     """
     Check if fixed stop loss is hit (before TP activation).
 
+    Checks the intrabar extreme (low for long, high for short) so the stop
+    triggers on a wick through the level, not only when the bar CLOSES beyond
+    it. The caller should exit at state.initial_sl (the SL level), capping the
+    loss at the configured stop rather than the potentially worse bar close.
+
     Args:
         state: Current trailing stop state
-        current_price: Current market price
+        current_price: Current market price (bar close)
+        bar_low: Intrabar low (long stops trigger on this)
+        bar_high: Intrabar high (short stops trigger on this)
 
     Returns:
         (is_hit, reason) - True if SL hit with reason
@@ -174,10 +183,13 @@ def check_fixed_sl_exit(
         return False, ""
 
     if state.side == "long":
-        if current_price <= state.initial_sl:
+        # Intrabar low crossing SL triggers, not just the close
+        extreme = bar_low if (bar_low is not None and bar_low == bar_low) else current_price
+        if extreme <= state.initial_sl:
             return True, f"Fixed SL hit at {state.initial_sl:.2f}"
     else:  # short
-        if current_price >= state.initial_sl:
+        extreme = bar_high if (bar_high is not None and bar_high == bar_high) else current_price
+        if extreme >= state.initial_sl:
             return True, f"Fixed SL hit at {state.initial_sl:.2f}"
 
     return False, ""
@@ -186,24 +198,35 @@ def check_fixed_sl_exit(
 def check_trailing_stop_exit(
     state: TrailingStopState,
     current_price: float,
+    bar_low: Optional[float] = None,
+    bar_high: Optional[float] = None,
 ) -> bool:
     """
     Check if current price has hit the trailing stop.
 
+    Checks the intrabar extreme (low for long, high for short) so the stop
+    triggers on a wick through the level, not only when the bar CLOSES beyond
+    it. The caller should exit at state.current_stop_price (the trailing stop
+    level), capping the loss at the configured stop rather than the bar close.
+
     Args:
         state: Current trailing stop state
-        current_price: Current market price
+        current_price: Current market price (bar close)
+        bar_low: Intrabar low (long stops trigger on this)
+        bar_high: Intrabar high (short stops trigger on this)
 
     Returns:
-        True if stop hit, position should be closed
+        True if stop hit, position should be closed; False otherwise.
     """
     if not state.is_active:
         return False
 
     if state.side == "long":
-        return current_price <= state.current_stop_price
-    else:
-        return current_price >= state.current_stop_price
+        extreme = bar_low if (bar_low is not None and bar_low == bar_low) else current_price
+        return extreme <= state.current_stop_price
+    else:  # short
+        extreme = bar_high if (bar_high is not None and bar_high == bar_high) else current_price
+        return extreme >= state.current_stop_price
 
 
 def create_trailing_stop(

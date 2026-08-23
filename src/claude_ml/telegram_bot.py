@@ -264,20 +264,26 @@ class TradingBot:
                 tp_level = entry_price - tp_distance
                 sl_level = entry_price + sl_distance
 
-            # Get current price from OKX with improved reliability
+            # Get current price from Bybit (matches the exchange chart the user watches).
+            # Note: trades are executed on OKX (BTC-USDT-SWAP), so entry prices are OKX;
+            # the two exchanges differ by a few dollars, which is why the bot prices and
+            # a Bybit chart can look slightly out of sync.
             import requests, time
             try:
-                # Use shorter timeout but retry if needed
                 response = requests.get(
-                    'https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT-SWAP',
+                    'https://api.bybit.com/v5/market/tickers',
+                    params={'category': 'linear', 'symbol': symbol},
                     timeout=5,
                     headers={'User-Agent': 'Mozilla/5.0'}
                 )
                 data = response.json()
-                current_price = float(data['data'][0]['last'])
+                item = data.get('result', {}).get('list', [{}])[0]
+                if 'lastPrice' not in item:
+                    raise ValueError("Bybit ticker returned no lastPrice")
+                current_price = float(item['lastPrice'])
 
-                # Also get timestamp from OKX to show how fresh the price is
-                price_ts_ms = int(data['data'][0].get('ts', 0))
+                # Timestamp from Bybit to show how fresh the price is
+                price_ts_ms = int(item.get('timestamp') or item.get('ts') or item.get('updateTime') or 0)
                 if price_ts_ms > 0:
                     price_age_sec = (int(time.time() * 1000) - price_ts_ms) / 1000
                     price_freshness = f"(price age: {price_age_sec:.1f}s)"

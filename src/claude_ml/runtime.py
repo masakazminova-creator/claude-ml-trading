@@ -15,6 +15,7 @@ import json
 import logging
 import requests
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,10 +119,16 @@ class RuntimeEngine:
         # Initialize risk manager
         self.risk_manager = RiskManager(settings)
 
-        # Initialize database FIRST (before other engines that need DB)
-        self.conn = sqlite3.connect(settings.runtime_db_path)
+        # Initialize database FIRST (before other engines that need DB).
+        # check_same_thread=False so the fast stop-checker thread can use it too.
+        self.conn = sqlite3.connect(settings.runtime_db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
+
+        # Thread-safety for the fast stop-checker (shares trailing_stops + DB with main cycle)
+        self._stop_lock = threading.Lock()
+        self._shutdown = threading.Event()
+        self._stop_thread: Optional[threading.Thread] = None
 
         # Initialize continuous learning engine
         self.learning_engine = ContinuousLearningEngine(settings)
@@ -345,6 +352,13 @@ class RuntimeEngine:
 
         cycle_count = 0
 
+        # Start the fast stop-checker thread (~every stop_check_interval_seconds),
+        # which reacts to stop levels near real-time, independent of the 15m cycle.
+        self._stop_thread = threading.Thread(
+            target=self._stop_check_loop, name="stop-checker", daemon=True
+        )
+        self._stop_thread.start()
+
         try:
             while True:
                 try:
@@ -365,6 +379,7 @@ class RuntimeEngine:
                         logger.critical(f"Max error streak ({self.settings.max_error_streak}) reached. Pausing.")
                         break
         finally:
+            self._shutdown.set()
             self.conn.close()
             logger.info("Runtime stopped")
 
@@ -579,87 +594,23 @@ class RuntimeEngine:
         if symbol in self.trailing_stops:
             trailing_state = self.trailing_stops[symbol]
 
-            # NEW: Check fixed stop loss BEFORE trailing activation
-            sl_hit, sl_reason = check_fixed_sl_exit(trailing_state, close_price)
+            # Intrabar extremes used so stops trigger on a wick through the
+            # level, not only when the bar CLOSES beyond it
+            bar_low = float(latest_row["low"]) if pd.notna(latest_row.get("low")) else None
+            bar_high = float(latest_row["high"]) if pd.notna(latest_row.get("high")) else None
+
+            # Check fixed stop loss BEFORE trailing activation
+            sl_hit, sl_reason = check_fixed_sl_exit(trailing_state, close_price, bar_low=bar_low, bar_high=bar_high)
 
             if sl_hit:
-                logger.info(f"[{symbol}] FIXED STOP LOSS HIT at {close_price:.4f}")
-                logger.info(f"         Reason: {sl_reason}")
-
-                # Calculate PnL at SL
-                raw_pnl_pct = ((close_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
-
-                # Subtract trading costs
-                total_cost_bps = self.settings.fee_bps * 2 + self.settings.slippage_bps * 2
-                cost_pct = total_cost_bps / 100
-                net_pnl_pct = raw_pnl_pct - cost_pct
-
-                logger.info(f"         Gross PnL: {raw_pnl_pct:+.3f}%")
-                logger.info(f"         Trading Costs: -{cost_pct:.3f}% (fee+slippage)")
-                logger.info(f"         Net PnL: {net_pnl_pct:+.3f}%")
-
-                # Close position in database
-                self.conn.execute("""
-                    UPDATE paper_trades
-                    SET status = 'closed',
-                        exit_ts = ?,
-                        exit_price = ?,
-                        pnl_pct = ?,
-                        exit_reason = 'fixed_stop_loss'
-                    WHERE symbol = ? AND status = 'open'
-                """, (latest_ts.isoformat(), close_price, net_pnl_pct, symbol))
-
-                logger.info(f"[{symbol}] Position closed in database (fixed SL)")
-
-                # Send Telegram notification
-                try:
-                    import requests
-                    pnl_sign = "+" if net_pnl_pct >= 0 else ""
-                    pnl_emoji = "🔴"  # Red circle for loss
-
-                    # Get trade ID and entry time from database
-                    trade_info = self.conn.execute("""
-                        SELECT id, entry_ts FROM paper_trades
-                        WHERE symbol = ? AND status = 'closed'
-                        ORDER BY id DESC LIMIT 1
-                    """, (symbol,)).fetchone()
-
-                    trade_id_close = trade_info[0] if trade_info else 'N/A'
-                    entry_time_db = trade_info[1] if trade_info else None
-                    entry_time_str = format_time_moscow(entry_time_db)
-                    exit_time_str = format_time_moscow(latest_ts.isoformat())
-
-                    exit_msg = (
-                        f"{pnl_emoji} *STOP LOSS HIT*\n\n"
-                        f"📋 *Trade ID: #{trade_id_close}*\n"
-                        f"Symbol: `{symbol}`\n"
-                        f"Side: *{trailing_state.side.upper()}*\n"
-                        f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
-                        f"Exit Price: `${close_price:.2f}`\n"
-                        f"⏰ Entry Time: `{entry_time_str}`\n"
-                        f"⏰ Exit Time: `{exit_time_str}`\n\n"
-                        f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
-                        f"Costs: `-{cost_pct:.3f}%`\n"
-                        f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
-                        f"Exit Reason: *Fixed Stop Loss*\n"
-                        f"SL Level: `${trailing_state.initial_sl:.2f}`"
-                    )
-                    url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
-                    data = {
-                        "chat_id": self.settings.telegram_chat_id,
-                        "text": exit_msg,
-                        "parse_mode": "Markdown"
-                    }
-                    response = requests.post(url, json=data, timeout=10)
-                    if response.status_code == 200:
-                        logger.info("Telegram SL notification sent")
-                    else:
-                        logger.warning(f"Telegram API error: {response.text}")
-                except Exception as e:
-                    logger.warning(f"Failed to send Telegram SL notification: {e}")
-
-                # Remove from trailing stops
-                del self.trailing_stops[symbol]
+                # Exit fills at the SL level (not the bar close), capping loss at SL
+                sl_exit_price = float(trailing_state.initial_sl) if trailing_state.initial_sl else close_price
+                self._close_position(
+                    symbol, trailing_state, sl_exit_price,
+                    exit_reason="fixed_stop_loss", title="STOP LOSS HIT",
+                    reason_label="Fixed Stop Loss", level_label="SL Level",
+                    exit_ts=latest_ts.isoformat(), reason_detail=sl_reason,
+                )
                 return  # Skip signal generation
 
             # Update trailing stop with new price
@@ -670,85 +621,17 @@ class RuntimeEngine:
             )
             self.trailing_stops[symbol] = trailing_state
 
-            # Check if trailing stop hit
-            if check_trailing_stop_exit(trailing_state, close_price):
-                # Calculate raw price PnL
-                raw_pnl_pct = ((close_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
-
-                # Subtract trading costs (fee + slippage for both entry and exit)
-                total_cost_bps = self.settings.fee_bps * 2 + self.settings.slippage_bps * 2  # Entry + Exit
-                cost_pct = total_cost_bps / 100  # Convert basis points to percentage
-
-                net_pnl_pct = raw_pnl_pct - cost_pct
-
-                logger.info(f"[{symbol}] TRAILING STOP HIT at {close_price:.4f}")
-                logger.info(f"         Gross PnL: {raw_pnl_pct:+.3f}%")
-                logger.info(f"         Trading Costs: -{cost_pct:.3f}% (fee+slippage)")
-                logger.info(f"         Net PnL: {net_pnl_pct:+.3f}%")
-
-                # CLOSE POSITION IN DATABASE FIRST
-                self.conn.execute("""
-                    UPDATE paper_trades
-                    SET status = 'closed',
-                        exit_ts = ?,
-                        exit_price = ?,
-                        pnl_pct = ?,
-                        exit_reason = 'trailing_stop'
-                    WHERE symbol = ? AND status = 'open'
-                """, (latest_ts.isoformat(), close_price, net_pnl_pct, symbol))
-
-                logger.info(f"[{symbol}] Position closed in database")
-
-                # Send Telegram notification for exit
-                try:
-                    import requests
-                    pnl_sign = "+" if net_pnl_pct >= 0 else ""
-                    pnl_emoji = "🟢" if net_pnl_pct > 0 else "🔴"
-
-                    # Get trade ID and entry time from database
-                    trade_info = self.conn.execute("""
-                        SELECT id, entry_ts FROM paper_trades
-                        WHERE symbol = ? AND status = 'closed'
-                        ORDER BY id DESC LIMIT 1
-                    """, (symbol,)).fetchone()
-
-                    trade_id_close = trade_info[0] if trade_info else 'N/A'
-                    entry_time_db = trade_info[1] if trade_info else None
-                    entry_time_str = format_time_moscow(entry_time_db)
-                    exit_time_str = format_time_moscow(latest_ts.isoformat())
-
-                    exit_msg = (
-                        f"{pnl_emoji} *TRADE CLOSED*\n\n"
-                        f"📋 *Trade ID: #{trade_id_close}*\n"
-                        f"Symbol: `{symbol}`\n"
-                        f"Side: *{trailing_state.side.upper()}*\n"
-                        f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
-                        f"Exit Price: `${close_price:.2f}`\n"
-                        f"⏰ Entry Time: `{entry_time_str}`\n"
-                        f"⏰ Exit Time: `{exit_time_str}`\n\n"
-                        f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
-                        f"Costs: `-{cost_pct:.3f}%`\n"
-                        f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
-                        f"Exit Reason: *Trailing Stop Hit*\n"
-                        f"Highest Price: `${trailing_state.highest_price:.2f}`\n"
-                        f"Final Stop: `${trailing_state.current_stop_price:.2f}`"
-                    )
-                    url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
-                    data = {
-                        "chat_id": self.settings.telegram_chat_id,
-                        "text": exit_msg,
-                        "parse_mode": "Markdown"
-                    }
-                    response = requests.post(url, json=data, timeout=10)
-                    if response.status_code == 200:
-                        logger.info("Telegram exit notification sent")
-                    else:
-                        logger.warning(f"Telegram API error: {response.text}")
-                except Exception as e:
-                    logger.warning(f"Failed to send Telegram exit notification: {e}")
-
-                # Remove from trailing stops tracking
-                del self.trailing_stops[symbol]
+            # Check if trailing stop hit (intrabar extreme, fills at stop level)
+            trail_hit = check_trailing_stop_exit(trailing_state, close_price, bar_low=bar_low, bar_high=bar_high)
+            if trail_hit:
+                # Exit fills at the trailing stop level (not the bar close)
+                trail_exit_price = float(trailing_state.current_stop_price)
+                self._close_position(
+                    symbol, trailing_state, trail_exit_price,
+                    exit_reason="trailing_stop", title="TRADE CLOSED",
+                    reason_label="Trailing Stop Hit", level_label="Stop Level",
+                    exit_ts=latest_ts.isoformat(),
+                )
                 return  # Skip signal generation for this bar
 
         # Get adaptive thresholds for this symbol and regime
@@ -1019,6 +902,167 @@ class RuntimeEngine:
         else:
             # Data-only mode
             print(f"[{symbol}] Regime: {regime_name}, Price: {close_price:.4f}")
+
+    def _close_position(
+        self,
+        symbol: str,
+        trailing_state: TrailingStopState,
+        exit_price: float,
+        exit_reason: str,
+        title: str,
+        reason_label: str,
+        level_label: str,
+        exit_ts: Optional[str] = None,
+        reason_detail: str = "",
+    ) -> bool:
+        """Close an open position at the given exit price.
+
+        Thread-safe: usable from both the main poll cycle and the fast stop-checker
+        thread. The UPDATE only matches rows with status='open', so the first caller
+        wins; any second caller (e.g. a race between the two threads) gets rowcount=0
+        and returns False — preventing double-close and duplicate Telegram alerts.
+        """
+        with self._stop_lock:
+            if exit_ts is None:
+                exit_ts = datetime.now(timezone.utc).isoformat()
+
+            raw_pnl_pct = ((exit_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
+            total_cost_bps = self.settings.fee_bps * 2 + self.settings.slippage_bps * 2
+            cost_pct = total_cost_bps / 100
+            net_pnl_pct = raw_pnl_pct - cost_pct
+
+            cur = self.conn.execute("""
+                UPDATE paper_trades
+                SET status = 'closed',
+                    exit_ts = ?,
+                    exit_price = ?,
+                    pnl_pct = ?,
+                    exit_reason = ?
+                WHERE symbol = ? AND status = 'open'
+            """, (exit_ts, exit_price, net_pnl_pct, exit_reason, symbol))
+            if cur.rowcount == 0:
+                logger.info(f"[{symbol}] Position already closed, skipping close")
+                return False
+
+            trade_info = self.conn.execute("""
+                SELECT id, entry_ts FROM paper_trades
+                WHERE symbol = ? AND status = 'closed'
+                ORDER BY id DESC LIMIT 1
+            """, (symbol,)).fetchone()
+            self.trailing_stops.pop(symbol, None)
+
+        logger.info(f"[{symbol}] Position closed ({reason_label}) at {exit_price:.4f}: gross {raw_pnl_pct:+.3f}%, net {net_pnl_pct:+.3f}%")
+        if reason_detail:
+            logger.info(f"         Reason: {reason_detail}")
+
+        # Send Telegram notification (outside the lock so we don't block the loop)
+        try:
+            import requests
+            pnl_sign = "+" if net_pnl_pct >= 0 else ""
+            pnl_emoji = "🟢" if net_pnl_pct > 0 else "🔴"
+            trade_id_close = trade_info[0] if trade_info else 'N/A'
+            entry_time_str = format_time_moscow(trade_info[1]) if trade_info and trade_info[1] else "N/A"
+            exit_time_str = format_time_moscow(exit_ts)
+
+            exit_msg = (
+                f"{pnl_emoji} *{title}*\n\n"
+                f"📋 *Trade ID: #{trade_id_close}*\n"
+                f"Symbol: `{symbol}`\n"
+                f"Side: *{trailing_state.side.upper()}*\n"
+                f"Entry Price: `${trailing_state.entry_price:.2f}`\n"
+                f"Exit Price: `${exit_price:.2f}`\n"
+                f"⏰ Entry Time: `{entry_time_str}`\n"
+                f"⏰ Exit Time: `{exit_time_str}`\n\n"
+                f"Gross PnL: `{pnl_sign}{raw_pnl_pct:.3f}%`\n"
+                f"Costs: `-{cost_pct:.3f}%`\n"
+                f"*Net PnL: `{pnl_sign}{net_pnl_pct:.3f}%`*\n\n"
+                f"Exit Reason: *{reason_label}*\n"
+                f"{level_label}: `${exit_price:.2f}`"
+            )
+            if trailing_state.is_active:
+                exit_msg += f"\nHighest: `${trailing_state.highest_price:.2f}`"
+            url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
+            data = {
+                "chat_id": self.settings.telegram_chat_id,
+                "text": exit_msg,
+                "parse_mode": "Markdown",
+            }
+            response = requests.post(url, json=data, timeout=10)
+            if response.status_code == 200:
+                logger.info("Telegram close notification sent")
+            else:
+                logger.warning(f"Telegram API error: {response.text}")
+        except Exception as e:
+            logger.warning(f"Failed to send Telegram close notification: {e}")
+
+        return True
+
+    def _stop_check_loop(self) -> None:
+        """Background loop that watches the live price and reacts to stop levels."""
+        logger.info(f"Fast stop-checker started (interval={self.settings.stop_check_interval_seconds}s)")
+        while not self._shutdown.is_set():
+            try:
+                self._check_stops_fast()
+            except Exception as e:
+                logger.error(f"[stop-checker] cycle error: {e}", exc_info=True)
+            self._shutdown.wait(self.settings.stop_check_interval_seconds)
+
+    def _check_stops_fast(self) -> None:
+        """Check the live forming-candle price for each open position and close on stop hit.
+
+        Runs ~ every stop_check_interval_seconds (default 1s) and is independent of the
+        heavy 15m signal cycle, so stop-losses react near real-time. Also covers periods
+        when the main cycle is paused (it returns early and wouldn't manage stops).
+        """
+        with self._stop_lock:
+            open_symbols = list(self.trailing_stops.keys())
+
+        for symbol in open_symbols:
+            try:
+                collector = self.collectors.get(symbol)
+                if collector is None:
+                    continue
+                bar_low = bar_high = None
+                try:
+                    # Live ticker price (near real-time) - primary source for stops
+                    price = collector.get_current_price(symbol)
+                except AttributeError:
+                    # Fallback: last closed candle (may be up to one bar stale)
+                    df = collector.fetch_klines(symbol, self.settings.timeframe, limit=1)
+                    if df.empty:
+                        continue
+                    latest = df.iloc[-1]
+                    price = float(latest["close"])
+                    bar_low = float(latest["low"]) if pd.notna(latest.get("low")) else None
+                    bar_high = float(latest["high"]) if pd.notna(latest.get("high")) else None
+            except Exception as e:
+                logger.warning(f"[stop-checker] fetch failed for {symbol}: {e}")
+                continue
+
+            with self._stop_lock:
+                ts = self.trailing_stops.get(symbol)
+            if ts is None:
+                continue
+
+            sl_hit, sl_reason = check_fixed_sl_exit(ts, price, bar_low=bar_low, bar_high=bar_high)
+            if sl_hit:
+                sl_exit_price = float(ts.initial_sl) if ts.initial_sl else price
+                self._close_position(
+                    symbol, ts, sl_exit_price,
+                    exit_reason="fixed_stop_loss", title="STOP LOSS HIT",
+                    reason_label="Fixed Stop Loss", level_label="SL Level",
+                    reason_detail=sl_reason,
+                )
+                continue
+
+            if ts.is_active and check_trailing_stop_exit(ts, price, bar_low=bar_low, bar_high=bar_high):
+                trail_exit_price = float(ts.current_stop_price)
+                self._close_position(
+                    symbol, ts, trail_exit_price,
+                    exit_reason="trailing_stop", title="TRADE CLOSED",
+                    reason_label="Trailing Stop Hit", level_label="Stop Level",
+                )
+                continue
 
     def _is_candle_fresh(self, candle_ts: datetime, symbol: str) -> bool:
         """Check if candle is fresh (not stale)."""

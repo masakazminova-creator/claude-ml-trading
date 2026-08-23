@@ -18,6 +18,7 @@ from claude_ml.trailing_stop import (
     create_trailing_stop,
     update_trailing_stop,
     check_trailing_stop_exit,
+    check_fixed_sl_exit,
 )
 
 
@@ -178,6 +179,57 @@ class TestShortPositionTrailing:
 
         # Stop should not have moved up
         assert second_stop <= first_stop
+
+
+class TestIntrabarStopTrigger:
+    """Test that stops trigger on the intrabar extreme, not just the bar close."""
+
+    def test_fixed_sl_exit_uses_intrabar_low_long(self):
+        """Long: wick below SL triggers even though close is above SL level."""
+        state = create_trailing_stop("BTCUSDT", "long", 50000.0, 500.0)
+        state.initial_sl = 49500.0  # -1.0% from entry
+
+        # Close (49000) is well below intrabar low (49400), but the intrabar LOW
+        # is below SL -> should trigger.
+        hit, reason = check_fixed_sl_exit(
+            state, current_price=49700.0, bar_low=49400.0, bar_high=49800.0
+        )
+        assert hit is True
+        assert f"{state.initial_sl:.2f}" in reason
+
+    def test_fixed_sl_exit_no_hit_when_close_below_but_low_above_long(self):
+        """Long: intrabar low stays above SL -> no hit even if close moved near it."""
+        state = create_trailing_stop("BTCUSDT", "long", 50000.0, 500.0)
+        state.initial_sl = 49500.0
+
+        hit, _ = check_fixed_sl_exit(
+            state, current_price=49550.0, bar_low=49600.0, bar_high=49800.0
+        )
+        assert hit is False
+
+    def test_fixed_sl_exit_uses_intrabar_high_short(self):
+        """Short: wick above SL triggers even though close is below SL level."""
+        state = create_trailing_stop("BTCUSDT", "short", 50000.0, 500.0)
+        state.initial_sl = 50500.0  # +1.0% from entry
+
+        hit, reason = check_fixed_sl_exit(
+            state, current_price=50300.0, bar_low=50200.0, bar_high=50600.0
+        )
+        assert hit is True
+        assert f"{state.initial_sl:.2f}" in reason
+
+    def test_trailing_exit_uses_intrabar_low_long(self):
+        """Trailing: intrabar low crosses the active stop even though close is above."""
+        state = create_trailing_stop("BTCUSDT", "long", 50000.0, 500.0)
+        # Activate trailing, stop settles at some level below the high
+        update_trailing_stop(state, 52000.0, atr=500.0)
+        assert state.is_active is True
+        stop_level = state.current_stop_price
+
+        # Close is just above the stop, but intrabar low dips below it
+        assert check_trailing_stop_exit(
+            state, current_price=stop_level + 50.0, bar_low=stop_level - 10.0, bar_high=stop_level + 80.0
+        ) is True
 
 
 if __name__ == "__main__":

@@ -123,6 +123,7 @@ class Settings:
 
     # === Runtime ===
     poll_seconds: int = int(_env("POLL_SECONDS", "15"))
+    stop_check_interval_seconds: int = int(_env("STOP_CHECK_INTERVAL_SECONDS", "1"))
     mode: str = _env("MODE", "paper").lower()
     paper_start_balance: float = float(_env("PAPER_START_BALANCE", "10000"))
     leverage: float = float(_env("LEVERAGE", "1"))

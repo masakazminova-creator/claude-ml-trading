@@ -43,6 +43,11 @@ class BybitCollector:
                     time.sleep(attempt * 2)
         raise RuntimeError(f"Bybit request failed after retries: {last_error}") from last_error
 
+    def get_current_price(self, symbol: str) -> float:
+        """Live last-price for a symbol via the Bybit tickers endpoint."""
+        payload = self._request("/v5/market/tickers", {"category": self.category, "symbol": symbol})
+        return float(payload["result"]["list"][0]["lastPrice"])
+
     def fetch_klines(self, symbol: str, interval: str, limit: int = 1000, end: int | None = None) -> pd.DataFrame:
         params = {
             "category": self.category,
@@ -204,6 +209,11 @@ class OKXCollector:
             "D": "1D",
         }
         return mapping.get(str(interval).upper(), f"{interval}m")
+
+    def get_current_price(self, symbol: str | None = None) -> float:
+        """Live last-price via the OKX ticker endpoint (near real-time)."""
+        payload = self._request("/api/v5/market/ticker", {"instId": self.inst_id})
+        return float(payload["data"][0]["last"])
 
     def fetch_klines(self, symbol: str, interval: str, limit: int = 100, after: int | None = None) -> pd.DataFrame:
         params = {
