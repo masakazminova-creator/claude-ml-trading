@@ -204,6 +204,7 @@ class RuntimeEngine:
                     sl_level=sl_level,
                     trigger_mult=(abs(tp_level - entry_price)) / atr,
                     stop_mult=1.5,
+                    trailing_pct=self.settings.trailing_stop_pct,
                 )
 
                 self.trailing_stops[symbol] = trailing_state
@@ -842,7 +843,8 @@ class RuntimeEngine:
                 tp_level=tp_level,
                 sl_level=sl_level,
                 trigger_mult=(tp_level - close_price) / atr,  # Activate at TP level
-                stop_mult=1.5,     # Stop at 1.5 ATR distance from max
+                stop_mult=1.5,     # Stop at 1.5 ATR distance from max (capped by trailing_stop_pct)
+                trailing_pct=self.settings.trailing_stop_pct,
             )
             self.trailing_stops[symbol] = trailing_state
             logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f}, fixed SL: ${sl_level})")

@@ -31,7 +31,8 @@ class TrailingStopState:
     is_active: bool = False  # Becomes active after trigger price reached
     initial_sl: Optional[float] = None  # Fixed stop loss (active until TP triggered)
     trigger_distance_atr_mult: float = 0.5  # ATR multiplier to activate
-    stop_distance_atr_mult: float = 1.5     # ATR multiplier for stop distance
+    stop_distance_atr_mult: float = 1.5     # ATR multiplier for stop distance (superseded by trailing_stop_pct)
+    trailing_stop_pct: float = 0.5           # Fixed max % distance from the extreme (caps give-back)
 
 
 def calculate_atr_trailing_stop(
@@ -43,9 +44,15 @@ def calculate_atr_trailing_stop(
     side: str,
     trigger_mult: float = 0.5,
     stop_mult: float = 1.5,
+    trailing_pct: float = 0.5,
 ) -> tuple[float, bool]:
     """
     Calculate ATR-based trailing stop price.
+
+    The stop trails the extreme by the *tighter* of (stop_mult ATR) and
+    (trailing_pct % of the extreme). Capping the distance at a fixed % keeps the
+    trailing from giving back a large chunk of profit when ATR is high (e.g.
+    1.5x ATR on a 0.75% ATR market = ~1.13% give-back, which a 0.5% cap avoids).
 
     Args:
         atr: Current ATR value
@@ -56,12 +63,12 @@ def calculate_atr_trailing_stop(
         side: 'long' or 'short'
         trigger_mult: ATR multiplier to activate trailing
         stop_mult: ATR multiplier for stop distance
+        trailing_pct: Fixed max % distance from the extreme (cap on give-back)
 
     Returns:
         (new_stop_price, is_triggered)
     """
     trigger_distance = atr * trigger_mult
-    stop_distance = atr * stop_mult
 
     if side == "long":
         # Check if price moved enough to activate trailing
@@ -70,7 +77,8 @@ def calculate_atr_trailing_stop(
         is_triggered = profit_from_entry >= trigger_distance
 
         if is_triggered:
-            # Trail below highest price
+            # Trail below highest price, capped at a fixed % give-back
+            stop_distance = min(atr * stop_mult, highest_price * (trailing_pct / 100))
             new_stop = highest_price - stop_distance
             return new_stop, True
         else:
@@ -83,7 +91,8 @@ def calculate_atr_trailing_stop(
         is_triggered = profit_from_entry >= trigger_distance
 
         if is_triggered:
-            # Trail above lowest price
+            # Trail above lowest price, capped at a fixed % give-back
+            stop_distance = min(atr * stop_mult, lowest_price * (trailing_pct / 100))
             new_stop = lowest_price + stop_distance
             return new_stop, True
         else:
@@ -122,6 +131,7 @@ def update_trailing_stop(
         side=state.side,
         trigger_mult=state.trigger_distance_atr_mult,
         stop_mult=state.stop_distance_atr_mult,
+        trailing_pct=state.trailing_stop_pct,
     )
 
     # Update state
@@ -238,6 +248,7 @@ def create_trailing_stop(
     sl_level: Optional[float] = None,
     trigger_mult: float = 0.5,
     stop_mult: float = 1.5,
+    trailing_pct: float = 0.5,
 ) -> TrailingStopState:
     """
     Create initial trailing stop state for a new position.
@@ -276,4 +287,5 @@ def create_trailing_stop(
         is_active=False,
         trigger_distance_atr_mult=trigger_mult,
         stop_distance_atr_mult=stop_mult,
+        trailing_stop_pct=trailing_pct,
     )

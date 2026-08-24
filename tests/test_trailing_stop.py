@@ -232,5 +232,27 @@ class TestIntrabarStopTrigger:
         ) is True
 
 
+class TestTrailingGiveBackCap:
+    """Trailing stop should not give back more than trailing_stop_pct, even with high ATR."""
+
+    def test_give_back_capped_at_fixed_pct_high_atr(self):
+        """High ATR: 1.5x ATR distance is wide, but give-back is capped at 0.5%."""
+        state = create_trailing_stop("BTCUSDT", "long", 50000.0, 2000.0)  # huge ATR
+        update_trailing_stop(state, 52000.0, atr=2000.0)  # activate
+        assert state.is_active is True
+        # 1.5x2000=3000; 0.5% of 52000=260 -> min=260 -> stop = 52000*0.995
+        assert abs(state.current_stop_price - 52000.0 * 0.995) < 0.01
+
+    def test_give_back_uses_atr_when_tighter(self):
+        """Low ATR: the (tighter) ATR distance is used, giving back even less than 0.5%."""
+        state = create_trailing_stop("BTCUSDT", "long", 50000.0, 200.0)  # small ATR
+        update_trailing_stop(state, 52000.0, atr=200.0)  # activate
+        # 1.5x200=300 < 0.5% of 52000=260? No: 300>260 -> min=260. Use bigger spread to test ATR path.
+        # ATR=100 -> 1.5x100=150 < 260 -> stop=52000-150=51850
+        state2 = create_trailing_stop("BTCUSDT", "long", 50000.0, 100.0)
+        update_trailing_stop(state2, 52000.0, atr=100.0)
+        assert abs(state2.current_stop_price - (52000.0 - 150.0)) < 0.01
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
