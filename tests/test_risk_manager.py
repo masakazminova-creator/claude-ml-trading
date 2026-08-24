@@ -189,5 +189,21 @@ class TestPositionSizing:
         assert abs(short_result.take_profit_price - 49600.0) < 0.01
 
 
+    def test_stop_loss_floored_at_min_pct(self):
+        """SL is never tighter than min_stop_loss_pct, so low-vol noise doesn't stop out trades."""
+        short_result = self.risk_manager.calculate_position_size(
+            symbol="BTCUSDT", entry_price=50000.0, atr=100.0,  # 0.2% ATR -> 2x = 0.4%, floored to 1.20%
+            regime="flat", model_confidence=0.75, side="short",
+        )
+        long_result = self.risk_manager.calculate_position_size(
+            symbol="BTCUSDT", entry_price=50000.0, atr=100.0,
+            regime="flat", model_confidence=0.75, side="long",
+        )
+        # 1.20% of 50000 = 600 -> SL floor distance (not the 0.4% ATR-based one)
+        assert abs((short_result.stop_loss_price - 50000.0) - 600.0) < 0.01
+        assert short_result.stop_loss_price > 50000.0
+        assert abs((50000.0 - long_result.stop_loss_price) - 600.0) < 0.01
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -260,6 +260,9 @@ class TradingBot:
             max_tp_distance = entry_price * (float(os.environ.get("MAX_TAKE_PROFIT_PCT", "0.80")) / 100)
             tp_distance = min(tp_distance, max_tp_distance)
             sl_distance = atr_value * 2.0
+            # Floor SL at the same min % the runtime uses
+            min_sl_distance = entry_price * (float(os.environ.get("MIN_STOP_LOSS_PCT", "1.20")) / 100)
+            sl_distance = max(sl_distance, min_sl_distance)
 
             if side == "long":
                 tp_level = entry_price + tp_distance

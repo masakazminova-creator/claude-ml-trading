@@ -111,6 +111,7 @@ class Settings:
     take_profit_atr_multiplier: float = float(_env("TAKE_PROFIT_ATR_MULTIPLIER", "2.5"))
     max_take_profit_pct: float = float(_env("MAX_TAKE_PROFIT_PCT", "0.80"))  # Cap TP (trailing-activation trigger) at this % of entry
     stop_loss_atr_multiplier: float = float(_env("STOP_LOSS_ATR_MULTIPLIER", "2.0"))
+    min_stop_loss_pct: float = float(_env("MIN_STOP_LOSS_PCT", "1.20"))  # Floor: SL never tighter than this % of entry (avoids stop-outs from low-vol noise)
     trailing_trigger_atr_multiplier: float = float(_env("TRAILING_TRIGGER_ATR_MULTIPLIER", "0.5"))
     trailing_step_atr_multiplier: float = float(_env("TRAILING_STEP_ATR_MULTIPLIER", "1.0"))
     soft_exit_enabled: bool = _env_bool("SOFT_EXIT_ENABLED", "true")

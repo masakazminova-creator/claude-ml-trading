@@ -130,6 +130,10 @@ class RiskManager:
         max_tp_distance = entry_price * (self.settings.max_take_profit_pct / 100)
         tp_distance = min(tp_distance, max_tp_distance)
         sl_distance = atr * self.settings.stop_loss_atr_multiplier
+        # Floor SL at a minimum % of entry so it isn't too tight in low volatility:
+        # a 0.5% stop (2x ATR on a 0.25% ATR market) gets knocked out by ordinary noise.
+        min_sl_distance = entry_price * (self.settings.min_stop_loss_pct / 100)
+        sl_distance = max(sl_distance, min_sl_distance)
 
         if side == "long":
             take_profit_price = entry_price + tp_distance
