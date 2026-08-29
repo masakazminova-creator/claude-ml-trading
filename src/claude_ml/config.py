@@ -109,9 +109,9 @@ class Settings:
     # === Exit Configuration ===
     min_atr_pct_for_entry: float = float(_env("MIN_ATR_PCT_FOR_ENTRY", "0.5"))  # Minimum ATR% to allow entries
     take_profit_atr_multiplier: float = float(_env("TAKE_PROFIT_ATR_MULTIPLIER", "2.5"))
-    max_take_profit_pct: float = float(_env("MAX_TAKE_PROFIT_PCT", "0.80"))  # Cap TP (trailing-activation trigger) at this % of entry
+    max_take_profit_pct: float = float(_env("MAX_TAKE_PROFIT_PCT", "1.50"))  # Cap TP (trailing-activation trigger) at this % of entry
     stop_loss_atr_multiplier: float = float(_env("STOP_LOSS_ATR_MULTIPLIER", "2.0"))
-    min_stop_loss_pct: float = float(_env("MIN_STOP_LOSS_PCT", "1.20"))  # Floor: SL never tighter than this % of entry (avoids stop-outs from low-vol noise)
+    min_stop_loss_pct: float = float(_env("MIN_STOP_LOSS_PCT", "0.80"))  # Floor: SL never tighter than this % of entry (avoids stop-outs from low-vol noise)
     trailing_stop_pct: float = float(_env("TRAILING_STOP_PCT", "0.5"))  # Trailing stop keeps at most this % of distance from the extreme (caps give-back)
     trailing_trigger_atr_multiplier: float = float(_env("TRAILING_TRIGGER_ATR_MULTIPLIER", "0.5"))
     trailing_step_atr_multiplier: float = float(_env("TRAILING_STEP_ATR_MULTIPLIER", "1.0"))

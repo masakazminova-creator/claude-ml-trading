@@ -4,6 +4,14 @@ import math
 
 import pandas as pd
 
+# Context features (cross-market) — appended at runtime
+CONTEXT_FEATURE_KEYS = [
+    "eth_btc_ratio",
+    "eth_15m_return_pct",
+    "btc_funding_rate",
+    "btc_oi_change_pct",
+    "spx_15m_return_pct",
+]
 
 FEATURE_COLUMNS = [
     # Returns
@@ -391,3 +399,18 @@ def attach_labels(
     labeled["long_target"] = pd.Series(long_targets, dtype="float").astype("Int64")
     labeled["short_target"] = pd.Series(short_targets, dtype="float").astype("Int64")
     return labeled
+
+
+def merge_context_features(df: pd.DataFrame, context: Dict[str, float]) -> pd.DataFrame:
+    """Merge cross-market context features into the feature DataFrame.
+
+    Args:
+        df: Existing feature DataFrame (indexed by row).
+        context: Dict from ContextFeatureCollector.get_all_context().
+
+    Returns:
+        DataFrame with additional context columns appended to every row.
+    """
+    for key in CONTEXT_FEATURE_KEYS:
+        df[key] = context.get(key, 0.0)
+    return df
