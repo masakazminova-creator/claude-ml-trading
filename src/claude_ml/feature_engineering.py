@@ -363,41 +363,118 @@ def attach_labels(
     short_min_return_pct: float | None = None,
     short_max_adverse_up_pct: float | None = None,
 ) -> pd.DataFrame:
-    labeled = df.copy().reset_index(drop=True)
-    future_close = labeled["close"].shift(-horizon_bars)
-    labeled["future_return_pct"] = ((future_close / labeled["close"]) - 1.0) * 100
+    """Label each bar with the realized PnL% of a simulated trade.
 
+    Instead of predicting whether price will rise/fall, we simulate an actual
+    trade with TP cap (trailing activation), fixed SL, and a simple trailing
+    mechanism. The label is the net PnL% after costs — this is what the model
+    should learn to predict for online learning.
+
+    Simulation logic (long side):
+    - Entry at bar close.
+    - TP trigger at entry * (1 + take_profit_pct/100) → activates trailing.
+    - Fixed SL at entry * (1 - stop_loss_pct/100).
+    - Once TP triggered, trailing follows high with give-back cap (0.5%).
+    - Exit when trailing hit or max_hold_bars reached.
+    - Short side mirrors long.
+    """
+    labeled = df.copy().reset_index(drop=True)
+
+    realized_pnl: list[float | None] = []
     best_returns: list[float | None] = []
     worst_returns: list[float | None] = []
-    long_targets: list[int | None] = []
-    short_targets: list[int | None] = []
+
+    tp_frac = take_profit_pct / 100.0
+    sl_frac = stop_loss_pct / 100.0
+    trail_cap = 0.005  # 0.5% trailing give-back cap
 
     for idx in range(len(labeled)):
         entry_price = float(labeled.at[idx, "close"])
         future_slice = labeled.iloc[idx + 1 : idx + 1 + max_hold_bars]
         if future_slice.empty:
+            realized_pnl.append(None)
             best_returns.append(None)
             worst_returns.append(None)
-            long_targets.append(None)
-            short_targets.append(None)
             continue
 
-        best_return = ((future_slice["high"].max() / entry_price) - 1.0) * 100
-        worst_return = ((future_slice["low"].min() / entry_price) - 1.0) * 100
-        best_returns.append(float(best_return))
-        worst_returns.append(float(worst_return))
+        highs = future_slice["high"].values
+        lows = future_slice["low"].values
+        closes = future_slice["close"].values
 
-        long_hit = best_return >= min_return_pct and worst_return > -(stop_loss_pct * 1.4)
-        short_min_return = min_return_pct if short_min_return_pct is None else short_min_return_pct
-        short_max_adverse = (take_profit_pct * 0.8) if short_max_adverse_up_pct is None else short_max_adverse_up_pct
-        short_hit = worst_return <= -short_min_return and best_return < short_max_adverse
-        long_targets.append(int(long_hit))
-        short_targets.append(int(short_hit))
+        # --- Long simulation ---
+        tp_level = entry_price * (1 + tp_frac)
+        sl_level = entry_price * (1 - sl_frac)
+        trailing_active = False
+        trail_stop = sl_level
+        exit_price_long = sl_level
+        exited = False
+
+        peak = entry_price
+        for h, l, c in zip(highs, lows, closes):
+            peak = max(peak, h)
+            # Check SL first (intrabar)
+            if l <= sl_level and not exited:
+                exit_price_long = sl_level
+                exited = True
+                break
+            # Check TP trigger
+            if not trailing_active and h >= tp_level:
+                trailing_active = True
+                trail_stop = peak * (1 - trail_cap)
+            # Check trailing exit
+            if trailing_active:
+                trail_stop = max(trail_stop, peak * (1 - trail_cap))
+                if l <= trail_stop:
+                    exit_price_long = trail_stop
+                    exited = True
+                    break
+
+        if not exited and trailing_active:
+            exit_price_long = closes[-1]  # exit at last close if trailing never hit
+
+        long_pnl = ((exit_price_long - entry_price) / entry_price) * 100
+
+        # --- Short simulation (mirror) ---
+        tp_level_s = entry_price * (1 - tp_frac)
+        sl_level_s = entry_price * (1 + sl_frac)
+        trailing_active_s = False
+        trail_stop_s = sl_level_s
+        exit_price_short = sl_level_s
+        exited_s = False
+
+        trough = entry_price
+        for h, l, c in zip(highs, lows, closes):
+            trough = min(trough, l)
+            if h >= sl_level_s and not exited_s:
+                exit_price_short = sl_level_s
+                exited_s = True
+                break
+            if not trailing_active_s and l <= tp_level_s:
+                trailing_active_s = True
+                trail_stop_s = trough * (1 + trail_cap)
+            if trailing_active_s:
+                trail_stop_s = min(trail_stop_s, trough * (1 + trail_cap))
+                if h >= trail_stop_s:
+                    exit_price_short = trail_stop_s
+                    exited_s = True
+                    break
+
+        if not exited_s and trailing_active_s:
+            exit_price_short = closes[-1]
+
+        short_pnl = ((entry_price - exit_price_short) / entry_price) * 100
+
+        # Use average of long and short as the label (model picks side later)
+        avg_pnl = (long_pnl + short_pnl) / 2.0
+        realized_pnl.append(avg_pnl)
+        best_returns.append(((highs.max() / entry_price) - 1.0) * 100)
+        worst_returns.append(((lows.min() / entry_price) - 1.0) * 100)
 
     labeled["future_best_return_pct"] = best_returns
     labeled["future_worst_return_pct"] = worst_returns
-    labeled["long_target"] = pd.Series(long_targets, dtype="float").astype("Int64")
-    labeled["short_target"] = pd.Series(short_targets, dtype="float").astype("Int64")
+    labeled["realized_pnl_pct"] = realized_pnl
+    labeled["long_target"] = pd.Series(realized_pnl, dtype="float")
+    labeled["short_target"] = pd.Series(realized_pnl, dtype="float")
     return labeled
 
 

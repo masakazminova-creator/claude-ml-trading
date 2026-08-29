@@ -111,6 +111,8 @@ class ContinuousLearningEngine:
         self.max_training_lookback_bars = 3000   # Maximum in stable markets (~31 days, was 5000)
         self.training_lookback_bars = self.base_training_lookback_bars  # Initialize with base value
         self.retrain_interval_trades = self.base_retrain_interval_trades  # Initialize adaptive interval
+        self.last_retrain_time = time.time()  # Track last retrain for time-based forcing
+        self.min_retrain_interval_seconds = 3600  # Force retrain at least every 1 hour
 
         self.walk_forward_folds = 5
 

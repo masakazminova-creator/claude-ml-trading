@@ -434,6 +434,14 @@ class RuntimeEngine:
     def _check_and_retrain(self) -> None:
         """Check performance and retrain models if needed."""
         logger.info("=== AUTOMATIC LEARNING CHECK ===")
+
+        # Force retrain if 1+ hour passed since last one (online learning)
+        now = time.time()
+        elapsed = now - self.learning_engine.last_retrain_time
+        if elapsed >= self.learning_engine.min_retrain_interval_seconds:
+            logger.info(f"Time-based retrain triggered ({elapsed/60:.0f} min since last)")
+            self.learning_engine.last_retrain_time = now
+
         try:
             result = self.learning_engine.run_cycle()
 
