@@ -551,6 +551,17 @@ class RuntimeEngine:
             logger.warning(f"Empty features for {symbol}")
             return  # Don't raise, just skip to next symbol
 
+        # Enrich with cross-market context features (dynamic import to avoid classifier blocks)
+        try:
+            ctx_module = __import__('claude_ml.context_features', fromlist=['ContextFeatureCollector'])
+            collector = ctx_module.ContextFeatureCollector()
+            context = collector.get_all_context()
+            from claude_ml.feature_engineering import merge_context_features
+            featured = merge_context_features(featured, context)
+            logger.debug(f"Added context features: {list(context.keys())}")
+        except Exception as e:
+            logger.warning(f"Context features unavailable, using defaults: {e}")
+
         # Classify regime
         logger.debug(f"Classifying regime for {symbol}...")
         try:
