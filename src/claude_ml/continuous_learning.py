@@ -86,7 +86,9 @@ class ContinuousLearningEngine:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.conn = sqlite3.connect(settings.runtime_db_path)
+        self.conn = sqlite3.connect(settings.runtime_db_path, timeout=30)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.row_factory = sqlite3.Row
 
         # Baseline metrics (from initial training)
@@ -392,6 +394,10 @@ class ContinuousLearningEngine:
                               min(self.max_retrain_interval_trades, retrain_interval))
         lookback_bars = max(self.min_training_lookback_bars,
                            min(self.max_training_lookback_bars, lookback_bars))
+        # Models require >= 800 rows to train (momentum), so never fetch less —
+        # otherwise retraining fails "Not enough data" exactly in high vol,
+        # the regime designed to force it.
+        lookback_bars = max(lookback_bars, 1000)
 
         logger.info(f"[ADAPTIVE RETRAIN] ATR={atr_pct:.2f}%, WR_drop={recent_wr_drop:.1f}%")
         logger.info(f"[ADAPTIVE RETRAIN] Retrain every {retrain_interval} trades, lookback {lookback_bars} bars")
@@ -560,6 +566,16 @@ class ContinuousLearningEngine:
 
         logger.info(f"[RETRAIN] Labels created")
 
+        # Guard: classifiers need both classes present. A flat/one-sided market
+        # can produce a single-class target, which previously crashed retraining
+        # with "index 1 is out of bounds for axis 1 with size 1".
+        for col in ("long_target", "short_target"):
+            vals = labeled_early[col].dropna()
+            if len(vals) == 0 or vals.nunique() < 2:
+                return RetrainingResult(
+                    triggered=False,
+                    reason=f"Single-class target '{col}' ({len(vals)} rows) — skipping retrain",
+                )
         # Train Early Signal Model
         logger.info("\n[RETRAIN] Training Early Signal Model...")
         early_model = EarlySignalModel(threshold=self.settings.early_signal_threshold)
@@ -614,9 +630,26 @@ class ContinuousLearningEngine:
 
         logger.info(f"[RETRAIN] Models saved to {self.settings.models_dir}")
 
-        # TODO: A/B test new models against current
-        # For now, assume new is better (simple promotion)
-        promoted = True
+        # Promote: atomically move the *_new.joblib files onto the live model
+        # names the runtime actually loads (runtime._reload_models reads
+        # early_signal.joblib etc.). Previously the *_new files were written
+        # and never used — retraining had no effect on live trading.
+        promoted = False
+        try:
+            import os
+            for new_path, live_name in (
+                (early_path, "early_signal.joblib"),
+                (confirm_path, "confirmation.joblib"),
+                (momentum_path, "momentum.joblib"),
+            ):
+                live_path = self.settings.models_dir / live_name
+                if live_path.exists():
+                    live_path.unlink()
+                os.replace(new_path, live_path)
+            promoted = True
+            logger.info("[RETRAIN] ✓ Models promoted to live filenames")
+        except Exception as e:
+            logger.warning(f"[RETRAIN] Promotion failed: {e}")
 
         result = RetrainingResult(
             triggered=True,

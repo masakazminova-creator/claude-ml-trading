@@ -165,6 +165,11 @@ class ConfirmationModel:
 
         if len(ready) < 500:
             raise RuntimeError(f"Not enough data for {side} confirmation model (need 500+, got {len(ready)})")
+        if ready[target_column].nunique() < 2:
+            raise RuntimeError(
+                f"Single-class target '{target_column}' for {side} confirmation model "
+                f"(values: {ready[target_column].unique()[:5].tolist()}) — cannot train classifier"
+            )
 
         # Split
         split_idx = max(500, int(len(ready) * train_split))

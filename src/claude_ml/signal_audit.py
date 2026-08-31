@@ -26,7 +26,9 @@ class SignalAuditEngine:
 
     def __init__(self, settings):
         self.settings = settings
-        self.conn = sqlite3.connect(settings.runtime_db_path)
+        self.conn = sqlite3.connect(settings.runtime_db_path, timeout=30)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -55,6 +57,37 @@ class SignalAuditEngine:
                 pnl_pct REAL,
                 exit_reason TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn.commit()
+
+        # Table written directly by runtime._log_all_decisions / _audit_log_decision
+        # (INSERT/SELECT in runtime.py). It must exist or every cycle spams
+        # "Failed to log decision" and the at_support/at_resistance entry guard
+        # silently stops working.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS signal_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                close_price REAL,
+                atr_pct REAL,
+                regime TEXT,
+                early_probability REAL,
+                confirmation_probability REAL,
+                momentum_score REAL,
+                adaptive_early_threshold REAL,
+                adaptive_confirmation_threshold REAL,
+                adaptive_momentum_threshold REAL,
+                action TEXT,
+                action_reason TEXT,
+                features_json TEXT,
+                next_1bar_return REAL,
+                next_3bar_return REAL,
+                next_6bar_return REAL,
+                next_high REAL,
+                next_low REAL,
+                payload_json TEXT
             )
         """)
         self.conn.commit()

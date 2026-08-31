@@ -121,7 +121,11 @@ class RuntimeEngine:
 
         # Initialize database FIRST (before other engines that need DB).
         # check_same_thread=False so the fast stop-checker thread can use it too.
-        self.conn = sqlite3.connect(settings.runtime_db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(settings.runtime_db_path, check_same_thread=False, timeout=30)
+        # WAL lets the Telegram container read while the trading bot writes;
+        # busy_timeout avoids immediate "database is locked" on contention.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -416,6 +420,17 @@ class RuntimeEngine:
             self.last_retrain_check = 0
             self._check_and_retrain()
 
+        # Risk circuit breakers: drawdown / daily-loss / portfolio-risk limits
+        try:
+            allowed, breaker_reason = self.risk_manager.check_circuit_breakers()
+            if not allowed:
+                self.trading_paused = True
+                self.pause_reason = f"Circuit breaker: {breaker_reason}"
+                logger.warning(f"Trading paused by risk circuit breaker: {breaker_reason}")
+                return
+        except Exception as e:
+            logger.warning(f"Circuit breaker check failed: {e}")
+
         for symbol in self.settings.symbols:
             try:
                 self._process_symbol(symbol)
@@ -612,7 +627,8 @@ class RuntimeEngine:
 
         # Check trailing stop for existing position
         if symbol in self.trailing_stops:
-            trailing_state = self.trailing_stops[symbol]
+            with self._stop_lock:
+                trailing_state = self.trailing_stops[symbol]
 
             # Intrabar extremes used so stops trigger on a wick through the
             # level, not only when the bar CLOSES beyond it
@@ -634,12 +650,13 @@ class RuntimeEngine:
                 return  # Skip signal generation
 
             # Update trailing stop with new price
-            trailing_state = update_trailing_stop(
-                state=trailing_state,
-                current_price=close_price,
-                atr=atr,
-            )
-            self.trailing_stops[symbol] = trailing_state
+            with self._stop_lock:
+                trailing_state = update_trailing_stop(
+                    state=trailing_state,
+                    current_price=close_price,
+                    atr=atr,
+                )
+                self.trailing_stops[symbol] = trailing_state
 
             # Check if trailing stop hit (intrabar extreme, fills at stop level)
             trail_hit = check_trailing_stop_exit(trailing_state, close_price, bar_low=bar_low, bar_high=bar_high)
@@ -688,12 +705,13 @@ class RuntimeEngine:
             self.ensemble.confirmation_model.threshold_long = confirm_thresh
             self.ensemble.momentum_model.threshold = momentum_thresh
 
-            decision = self.ensemble.evaluate(latest_row, regime=regime_name, stage="full")
-
-            # Restore original thresholds
-            self.ensemble.early_model.threshold = old_early
-            self.ensemble.confirmation_model.threshold_long = old_confirm
-            self.ensemble.momentum_model.threshold = old_momentum
+            try:
+                decision = self.ensemble.evaluate(latest_row, regime=regime_name, stage="full")
+            finally:
+                # Restore original thresholds even if evaluate() raises
+                self.ensemble.early_model.threshold = old_early
+                self.ensemble.confirmation_model.threshold_long = old_confirm
+                self.ensemble.momentum_model.threshold = old_momentum
 
             if decision:
                 print(f"[{symbol}] {decision.action.upper()} | Side: {decision.side} | "
@@ -861,12 +879,18 @@ class RuntimeEngine:
                 atr=atr,
                 tp_level=tp_level,
                 sl_level=sl_level,
-                trigger_mult=(tp_level - close_price) / atr,  # Activate at TP level
+                trigger_mult=abs(tp_level - close_price) / atr,  # Activate at TP level (abs: short TP is below entry)
                 stop_mult=1.5,     # Stop at 1.5 ATR distance from max (capped by trailing_stop_pct)
                 trailing_pct=self.settings.trailing_stop_pct,
             )
             self.trailing_stops[symbol] = trailing_state
             logger.info(f"         Trailing stop created (activates at TP: ${tp_level:.2f}, fixed SL: ${sl_level})")
+
+            # Track position in risk manager for portfolio-risk limits
+            try:
+                self.risk_manager.add_open_position(symbol, risk_result.adjusted_size_pct)
+            except Exception as e:
+                logger.warning(f"Failed to track position in risk manager: {e}")
 
             # Send Telegram notification for entry
             try:
@@ -947,7 +971,11 @@ class RuntimeEngine:
             if exit_ts is None:
                 exit_ts = datetime.now(timezone.utc).isoformat()
 
-            raw_pnl_pct = ((exit_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
+            # Short PnL is inverted relative to price movement
+            if trailing_state.side == "short":
+                raw_pnl_pct = ((trailing_state.entry_price - exit_price) / trailing_state.entry_price * 100)
+            else:
+                raw_pnl_pct = ((exit_price - trailing_state.entry_price) / trailing_state.entry_price * 100)
             total_cost_bps = self.settings.fee_bps * 2 + self.settings.slippage_bps * 2
             cost_pct = total_cost_bps / 100
             net_pnl_pct = raw_pnl_pct - cost_pct
@@ -961,8 +989,13 @@ class RuntimeEngine:
                     exit_reason = ?
                 WHERE symbol = ? AND status = 'open'
             """, (exit_ts, exit_price, net_pnl_pct, exit_reason, symbol))
+            self.conn.commit()
             if cur.rowcount == 0:
-                logger.info(f"[{symbol}] Position already closed, skipping close")
+                # Position already closed (e.g. stop-checker won the race while
+                # the main loop held a stale state). Drop the ghost entry so the
+                # symbol can trade again instead of blocking forever.
+                self.trailing_stops.pop(symbol, None)
+                logger.info(f"[{symbol}] Position already closed, dropping stale trailing stop")
                 return False
 
             trade_info = self.conn.execute("""
@@ -1015,6 +1048,31 @@ class RuntimeEngine:
                 logger.warning(f"Telegram API error: {response.text}")
         except Exception as e:
             logger.warning(f"Failed to send Telegram close notification: {e}")
+
+        # Record equity point so /balance drawdown reflects reality (equity_curve
+        # previously had zero rows and drawdown was always reported as 0.00%).
+        try:
+            last_balance = self.conn.execute(
+                "SELECT balance FROM equity_curve ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            start_balance = float(getattr(self.settings, "paper_start_balance", 10000.0))
+            prev = float(last_balance[0]) if last_balance else start_balance
+            new_balance = prev * (1 + net_pnl_pct / 100)
+            self.conn.execute(
+                "INSERT INTO equity_curve (ts, balance, trade_id, pnl_pct) VALUES (?, ?, ?, ?)",
+                (exit_ts, new_balance, trade_info[0] if trade_info else None, net_pnl_pct),
+            )
+            self.conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to record equity curve point: {e}")
+
+        # Feed the risk manager so circuit breakers / drawdown / win-rate
+        # multipliers reflect reality (previously never updated: balance,
+        # drawdown and daily-loss limits were permanently inert).
+        try:
+            self.risk_manager.update_performance(net_pnl_pct, symbol)
+        except Exception as e:
+            logger.warning(f"Failed to update risk manager performance: {e}")
 
         return True
 

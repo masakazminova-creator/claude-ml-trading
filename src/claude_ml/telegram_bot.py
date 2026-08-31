@@ -74,7 +74,9 @@ class TradingBot:
     async def balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /balance command."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
             cursor = conn.cursor()
 
             # Calculate REALIZED balance only (start balance + closed trades PnL)
@@ -169,7 +171,9 @@ class TradingBot:
     async def trades(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /trades command."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
             cursor = conn.cursor()
 
             cursor.execute("""
@@ -225,7 +229,9 @@ class TradingBot:
     async def position(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /position command - show current open position details."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
             cursor = conn.cursor()
 
             # Get open position
@@ -378,7 +384,9 @@ class TradingBot:
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
             cursor = conn.cursor()
 
             # Check if system is running (recent health log)

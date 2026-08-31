@@ -154,22 +154,28 @@ class MultiTimeframeAnalyzer:
             current_close = close.iloc[-1]
             ema_diff = float((ema_8.iloc[-1] - ema_21.iloc[-1]) / ema_21.iloc[-1] * 100)
 
-            # Trend determination
-            if ema_diff > 0.5:
+            # Trend determination. Threshold must scale with the timeframe:
+            # a fixed 0.5% EMA8/21 spread is a daily-chart magnitude — on 15m/1H
+            # BTC the spread is typically 0.05-0.3%, so every timeframe read as
+            # "neutral" and entries were blocked for days ("Neutral/choppy
+            # across timeframes (3/3 TFs)").
+            tf_threshold = {"5": 0.10, "15": 0.15, "60": 0.50, "240": 1.20}.get(interval, 0.5)
+            if ema_diff > tf_threshold:
                 trend = "bullish"
-                trend_strength = min(abs(ema_diff) / 2.0, 1.0)
-            elif ema_diff < -0.5:
+                trend_strength = min(abs(ema_diff) / (tf_threshold * 4), 1.0)
+            elif ema_diff < -tf_threshold:
                 trend = "bearish"
-                trend_strength = min(abs(ema_diff) / 2.0, 1.0)
+                trend_strength = min(abs(ema_diff) / (tf_threshold * 4), 1.0)
             else:
                 trend = "neutral"
-                trend_strength = 1.0 - abs(ema_diff) / 0.5
+                trend_strength = 1.0 - abs(ema_diff) / tf_threshold
 
-            # Momentum
+            # Momentum — threshold also scales with timeframe (5 bars return)
             recent_ret = float((close.iloc[-1] - close.iloc[-5]) / close.iloc[-5] * 100)
-            if recent_ret > 1.0:
+            mom_threshold = {"5": 0.15, "15": 0.25, "60": 0.60, "240": 1.50}.get(interval, 1.0)
+            if recent_ret > mom_threshold:
                 momentum = "positive"
-            elif recent_ret < -1.0:
+            elif recent_ret < -mom_threshold:
                 momentum = "negative"
             else:
                 momentum = "neutral"

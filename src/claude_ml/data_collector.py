@@ -224,6 +224,8 @@ class OKXCollector:
         if after is not None:
             params["after"] = str(int(after))
         payload = self._request("/api/v5/market/history-candles", params)
+        # NOTE: the last row for the LIVE endpoint can be the still-forming
+        # candle; history-candles rows carry confirm='1' for closed bars.
         rows = payload.get("data", []) or []
         if not rows:
             raise RuntimeError("OKX returned empty candle set")
@@ -245,6 +247,13 @@ class OKXCollector:
         frame["ts"] = pd.to_datetime(frame["start_time"].astype("int64"), unit="ms", utc=True)
         for col in ["open", "high", "low", "close", "volume", "turnover"]:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        # Drop the still-forming candle (confirm='0') so decisions are never
+        # made on a partial bar — its indicator values can appear and vanish
+        # before close.
+        if "confirm" in frame.columns and len(frame) > 1:
+            confirmed = frame["confirm"].astype(str) == "1"
+            if confirmed.any():
+                frame = frame[confirmed]
         return frame[["ts", "open", "high", "low", "close", "volume", "turnover"]].dropna().reset_index(drop=True)
 
     def fetch_history(self, symbol: str, interval: str, lookback_bars: int) -> pd.DataFrame:
