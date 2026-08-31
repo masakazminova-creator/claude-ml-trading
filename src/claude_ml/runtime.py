@@ -1148,7 +1148,11 @@ class RuntimeEngine:
         now = datetime.now(timezone.utc)
         age_minutes = (now - candle_ts.replace(tzinfo=timezone.utc)).total_seconds() / 60
 
-        is_fresh = age_minutes <= (int(self.settings.timeframe) + self.settings.stale_candle_grace_minutes)
+        # Candles are now CLOSED bars (forming candle is filtered out in the
+        # collector), so the newest bar's ts can be up to 2x the timeframe old
+        # (its open time up to one full period back from the current forming
+        # period start). Allow 2x timeframe + grace.
+        is_fresh = age_minutes <= (2 * int(self.settings.timeframe) + self.settings.stale_candle_grace_minutes)
 
         if is_fresh:
             self.last_candle_time[symbol] = candle_ts
