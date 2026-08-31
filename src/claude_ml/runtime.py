@@ -17,7 +17,7 @@ import requests
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,7 +25,7 @@ import pandas as pd
 
 from .config import Settings
 from .data_collector import make_collector
-from .feature_engineering import build_features
+from .feature_engineering import build_features, attach_labels
 from .regime_detector import classify_regime
 from .notifier import TelegramNotifier
 from .ensemble import EnsembleEngine
@@ -36,7 +36,7 @@ from .signal_audit import SignalAuditEngine
 from .trailing_stop import TrailingStopState, create_trailing_stop, update_trailing_stop, check_trailing_stop_exit, check_fixed_sl_exit
 from .feature_importance import OnlineFeatureSelector
 from .multi_timeframe import MultiTimeframeAnalyzer
-from .regime_models import ExpertRouter, RegimeClassification
+from .regime_models import ExpertRouter  # kept for potential future use; no longer drives decisions
 from .atr_percentile import ATRPercentileAnalyzer
 from .models.early_signal import EarlySignalModel
 from .models.confirmation import ConfirmationModel
@@ -194,9 +194,18 @@ class RuntimeEngine:
                 atr_ratio = float(payload.get('atr_pct', 0.0025))
                 atr = atr_ratio * entry_price  # Convert ratio to absolute value
 
-                # Calculate TP/SL levels (same as when position was created)
-                tp_level = entry_price + (atr * 2.5) if side == "long" else entry_price - (atr * 2.5)
-                sl_level = entry_price - (atr * 2.0) if side == "long" else entry_price + (atr * 2.0)
+                # Calculate TP/SL levels (same as when position was created),
+                # applying the same TP cap / SL floor the entry path used —
+                # without this a restored position ran with a tighter SL than
+                # the trade was opened with (risk profile changed on restart).
+                tp_raw = atr * 2.5
+                sl_raw = atr * 2.0
+                max_tp_frac = self.settings.max_take_profit_pct / 100
+                min_sl_frac = self.settings.min_stop_loss_pct / 100
+                tp = min(tp_raw, entry_price * max_tp_frac)
+                sl = max(sl_raw, entry_price * min_sl_frac)
+                tp_level = entry_price + tp if side == "long" else entry_price - tp
+                sl_level = entry_price - sl if side == "long" else entry_price + sl
 
                 # Create trailing stop state
                 trailing_state = create_trailing_stop(
@@ -595,10 +604,30 @@ class RuntimeEngine:
             logger.error(f"Failed to classify regime for {symbol}: {e}", exc_info=True)
             return
 
-        # Update online feature importance (Phase 2)
+        # Enforce entry gating from the regime detector: squeeze structure or
+        # a wide spread used to be computed and then ignored (allow_entries was
+        # dead code). These are exactly the conditions meant to block entries.
+        if not regime.get("allow_entries", True):
+            logger.info(
+                f"[{symbol}] ⏸️ Regime blocks entries "
+                f"(structure={regime_name}, liquidity={regime.get('liquidity_regime')})"
+            )
+            return
+
+        # Update online feature importance (Phase 2): compute labels for the
+        # recent window first — build_features() never creates long_target,
+        # so without this the selector always saw no target and returned [].
         try:
+            labeled = attach_labels(
+                featured,
+                horizon_bars=6,
+                min_return_pct=0.15,
+                take_profit_pct=1.0,
+                stop_loss_pct=1.0,
+                max_hold_bars=6,
+            )
             active_features = self.feature_selector.update_feature_importance(
-                df=featured,
+                df=labeled,
                 target_column="long_target",
             )
             if active_features:
@@ -611,13 +640,9 @@ class RuntimeEngine:
         if not self._is_candle_fresh(latest_ts, symbol):
             return
 
-        # Phase 5: Get current regime classification from expert router
-        try:
-            regime_class = self.expert_router.get_current_regime(featured)
-            logger.debug(f"[{symbol}] Regime: {regime_class.primary_regime} (confidence={regime_class.confidence:.2f})")
-        except Exception as e:
-            logger.warning(f"Regime detection failed for {symbol}: {e}")
-            regime_class = None
+        # (Dead second regime classifier removed — regime_models.RegimeDetector
+        # logged "Regime: trend (confidence=...)" that gated nothing and
+        # contradicted classify_regime. One classifier, one source of truth.)
 
         # Get latest row
         latest_row = featured.iloc[-1]
@@ -694,15 +719,21 @@ class RuntimeEngine:
 
         logger.debug(f"[ADAPTIVE] {symbol} thresholds: early={early_thresh:.3f}, confirm={confirm_thresh:.3f}, momentum={momentum_thresh:.3f}")
 
+        decision = None  # data-only mode (no ensemble) must not raise UnboundLocalError below
+
         # Run ensemble if available (pass adaptive thresholds)
         if self.ensemble:
             # Temporarily override settings with adaptive thresholds
             old_early = self.ensemble.early_model.threshold
-            old_confirm = self.ensemble.confirmation_model.threshold_long
+            old_confirm_l = self.ensemble.confirmation_model.threshold_long
+            old_confirm_s = self.ensemble.confirmation_model.threshold_short
             old_momentum = self.ensemble.momentum_model.threshold
 
             self.ensemble.early_model.threshold = early_thresh
             self.ensemble.confirmation_model.threshold_long = confirm_thresh
+            # Short side previously kept a stale static threshold — adaptive
+            # machinery never affected short entries.
+            self.ensemble.confirmation_model.threshold_short = max(0.5, confirm_thresh - 0.05)
             self.ensemble.momentum_model.threshold = momentum_thresh
 
             try:
@@ -710,7 +741,8 @@ class RuntimeEngine:
             finally:
                 # Restore original thresholds even if evaluate() raises
                 self.ensemble.early_model.threshold = old_early
-                self.ensemble.confirmation_model.threshold_long = old_confirm
+                self.ensemble.confirmation_model.threshold_long = old_confirm_l
+                self.ensemble.confirmation_model.threshold_short = old_confirm_s
                 self.ensemble.momentum_model.threshold = old_momentum
 
             if decision:
@@ -757,10 +789,19 @@ class RuntimeEngine:
                     reasoning="Ensemble returned None - all models below thresholds",
                 )
 
+        # ATR percentile history must sample EVERY bar — previously it only
+        # recorded ATR at moments the ensemble wanted to ENTER, so the
+        # "bottom 10% of history" comparison ran against a biased,
+        # non-stationary sample.
+        atr_pct_value = atr_ratio * 100  # percentage
+        try:
+            self.atr_analyzer.update(symbol, atr_pct_value)
+        except Exception as e:
+            logger.debug(f"ATR history record failed: {e}")
+
         # Calculate position size via risk manager (for ENTER decisions only)
         if decision and decision.action.upper().startswith("ENTER"):
             # NEW: RELATIVE ATR ANALYSIS (replaces absolute filter)
-            atr_pct_value = atr_ratio * 100  # Convert ratio to percentage
             atr_result = self.atr_analyzer.analyze(symbol, atr_pct_value)
 
             logger.info(f"[{symbol}] ATR: {atr_pct_value:.3f}% (percentile: {atr_result.percentile_30d:.1f}%, compressed: {atr_result.is_compressed}, breakout_setup: {atr_result.is_breakout_setup})")
@@ -776,9 +817,9 @@ class RuntimeEngine:
             try:
                 recent_signals = self.conn.execute("""
                     SELECT action_reason FROM signal_audit_log
-                    WHERE ts <= ? AND action LIKE '%enter%'
+                    WHERE ts <= ? AND symbol = ? AND action LIKE '%enter%'
                     ORDER BY ts DESC LIMIT 3
-                """, (latest_ts.isoformat(),)).fetchall()
+                """, (latest_ts.isoformat(), symbol)).fetchall()
 
                 if decision.side == "long":
                     # Check for resistance (bad for long)
@@ -895,6 +936,13 @@ class RuntimeEngine:
             # Send Telegram notification for entry
             try:
                 entry_time_str = format_time_moscow(latest_ts.isoformat())
+                # Escape Markdown special chars: a stray `*` or `_` in model
+                # reasoning returns Telegram 400 and drops the entry alert.
+                def _md_escape(text: str) -> str:
+                    for ch in ("\\", "*", "`", "_", "["):
+                        text = text.replace(ch, f"\\{ch}")
+                    return text
+                safe_reasoning = _md_escape("; ".join(decision.reasoning[:3]))
                 entry_msg = (
                     f"🔔 *NEW TRADE ENTRY*\n\n"
                     f"📋 *Trade ID: #{trade_id}*\n"
@@ -908,7 +956,7 @@ class RuntimeEngine:
                     f"Stop Loss: `${risk_result.stop_loss_price:.2f}`\n"
                     f"Trailing Stop: `${trailing_state.current_stop_price:.2f}`\n\n"
                     f"Regime: `{regime_name}`\n"
-                    f"Reasoning: {'; '.join(decision.reasoning[:3])}"
+                    f"Reasoning: {safe_reasoning}"
                 )
                 url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
                 data = {
@@ -1284,8 +1332,55 @@ class RuntimeEngine:
         Log ALL decisions (ENTER, SKIP, WAIT) to signal_audit table for analysis.
 
         This allows us to analyze missed opportunities and understand why signals were skipped.
+
+        Outcome columns (next_*_return / next_high / next_low) are NULL at
+        insert time — the future is genuinely unknown when a decision is
+        logged. A backfill pass updates past rows once future bars exist, so
+        "missed signal" analyses work on real data instead of hardcoded zeros.
         """
         try:
+            # Backfill outcome columns of past decisions for this symbol: any
+            # audit row whose ts matches a bar at least 6 bars back in
+            # `featured` now has its full future window known.
+            try:
+                if featured is not None and len(featured) > 7:
+                    backfill_from_ts = featured["ts"].iloc[-7]
+                    past_rows = self.conn.execute("""
+                        SELECT id, ts, close_price FROM signal_audit_log
+                        WHERE symbol = ? AND next_1bar_return IS NULL AND ts <= ?
+                        ORDER BY ts DESC LIMIT 30
+                    """, (symbol, backfill_from_ts.isoformat() if hasattr(backfill_from_ts, 'isoformat') else str(backfill_from_ts))).fetchall()
+                    ts_to_row = {str(r[1]): (float(r[2])) for r in past_rows}
+                    closes = featured["close"].tolist()
+                    highs = featured["high"].tolist()
+                    lows = featured["low"].tolist()
+                    for row_id, row_ts, row_close in past_rows:
+                        # find featured index with matching ts
+                        match = featured.index[featured["ts"].astype(str) == row_ts[:19]]
+                        if len(match) == 0:
+                            continue
+                        i = featured.index.get_loc(match[0])
+                        base = float(closes[i])
+                        if base <= 0 or i + 6 >= len(featured):
+                            continue
+                        self.conn.execute("""
+                            UPDATE signal_audit_log
+                            SET next_1bar_return = ?, next_3bar_return = ?,
+                                next_6bar_return = ?, next_high = ?, next_low = ?
+                            WHERE id = ?
+                        """, (
+                            (float(closes[i+1]) - base) / base * 100,
+                            (float(closes[i+3]) - base) / base * 100,
+                            (float(closes[i+6]) - base) / base * 100,
+                            float(max(highs[i+1:i+7])),
+                            float(min(lows[i+1:i+7])),
+                            row_id,
+                        ))
+                    if past_rows:
+                        self.conn.commit()
+            except Exception as e:
+                logger.debug(f"Audit outcome backfill skipped: {e}")
+
             logger.info(f"Logging decision to signal_audit_log: {symbol} {action} (conf={confidence:.0f}%)")
             self.conn.execute("""
                 INSERT INTO signal_audit_log (
@@ -1333,6 +1428,21 @@ class RuntimeEngine:
             note
         ))
         self.conn.commit()
+
+        # Retention: health_log grows ~5.7k rows/day with no pruning anywhere.
+        # Run at most once per hour (cheap guard on an indexed-less table is
+        # fine at this size).
+        now_min = datetime.now(timezone.utc).timestamp()
+        if now_min - getattr(self, "_last_prune_ts", 0) > 3600:
+            self._last_prune_ts = now_min
+            try:
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+                self.conn.execute("DELETE FROM health_log WHERE ts < ?", (cutoff,))
+                self.conn.execute("DELETE FROM signal_audit_log WHERE ts < ?", (cutoff,))
+                self.conn.execute("DELETE FROM model_decisions WHERE ts < ?", (cutoff,))
+                self.conn.commit()
+            except Exception as e:
+                logger.warning(f"Log retention prune failed: {e}")
 
         if status == "ok":
             self.error_streak = 0  # Reset on success

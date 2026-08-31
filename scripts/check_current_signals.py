@@ -15,7 +15,7 @@ os.environ['PYTHONIOENCODING'] = 'utf-8'
 import pandas as pd
 from claude_ml.config import Settings
 from claude_ml.data_collector import OKXCollector
-from claude_ml.feature_engineering import attach_labels
+from claude_ml.feature_engineering import attach_labels, build_features
 from claude_ml.regime_detector import classify_regime
 from claude_ml.ensemble import EnsembleEngine
 from claude_ml.models.early_signal import EarlySignalModel
@@ -52,9 +52,14 @@ def check_signals():
 
     print(f"OK Fetched {len(df)} candles")
 
-    # Build features
-    featured = attach_labels(df.copy())
-    latest_row = featured.iloc[-1]
+    # Build features — build_features (with labels attached for downstream
+    # inspection), NOT bare attach_labels (attach_labels requires
+    # horizon/TP/SL/max_hold args; calling it with none raised TypeError,
+    # so this diagnostic script could never run).
+    featured = build_features(df.copy())
+    labeled = attach_labels(featured, horizon_bars=6, min_return_pct=0.15,
+                            take_profit_pct=1.0, stop_loss_pct=1.0, max_hold_bars=6)
+    latest_row = labeled.iloc[-1]
 
     # Get regime
     regime_result = classify_regime(latest_row)

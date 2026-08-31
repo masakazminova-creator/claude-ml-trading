@@ -495,5 +495,15 @@ def merge_context_features(df: pd.DataFrame, context: Dict[str, float]) -> pd.Da
         DataFrame with additional context columns appended to every row.
     """
     for key in CONTEXT_FEATURE_KEYS:
-        df[key] = context.get(key, 0.0)
+        # NaN (not 0.0) for missing values: 0 funding / 0 OI-change is a real
+        # signal, a failed fetch is "unknown". Only the latest row gets the
+        # live value — the historical rows would otherwise all carry a
+        # snapshot of "now", which is meaningless and poisons any future
+        # training on these columns.
+        col = float("nan")
+        if key in context and context[key] is not None:
+            col = context[key]
+        df[key] = col
+        if len(df):
+            df.iloc[-1, df.columns.get_loc(key)] = col
     return df

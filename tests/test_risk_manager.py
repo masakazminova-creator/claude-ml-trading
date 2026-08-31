@@ -80,18 +80,19 @@ class TestRiskManager:
         assert abs(self.risk_manager.drawdown_pct - expected_dd) < 0.01
 
     def test_circuit_breaker_emergency_stop(self):
-        """Test emergency stop on critical conditions."""
-        # Simulate catastrophic loss
+        """Test circuit breaker fires on severe drawdown with real assertions."""
+        # Simulate catastrophic loss: -35% → drawdown far above pause threshold
         self.risk_manager.update_performance(pnl_pct=-35.0, symbol="BTCUSDT")
 
-        # Check if circuit breaker triggers
-        should_stop, reason = self.risk_manager.check_circuit_breakers()
+        allowed, reason = self.risk_manager.check_circuit_breakers()
 
-        # With 35% loss, should NOT trigger emergency yet
-        # (threshold is 15% for pause_at_dd_pct)
-        # This test verifies the logic exists
-        assert isinstance(should_stop, bool)
-        assert isinstance(reason, str)
+        # Drawdown here is 35% (peak=10000, balance=6500), pause threshold 12%
+        # → trading NOT allowed. Contract: (allowed=False, explanatory reason).
+        # Previously this test only asserted types, so a fully broken
+        # circuit breaker would still pass.
+        assert allowed is False, f"circuit breaker should block at 35% drawdown"
+        assert reason
+        assert "drawdown" in reason.lower()
 
     def test_position_size_within_bounds(self):
         """Test that position size is within reasonable bounds."""

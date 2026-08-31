@@ -143,9 +143,13 @@ class EarlySignalModel:
         model = self.create_model()
         model.fit(train_df[available_features], train_df[target_column].astype(int))
 
-        # Calibrate probabilities (Platt scaling)
+        # Calibrate probabilities (Platt scaling) via CV on the TRAIN split.
+        # Previously the calibrator was fit on the test split and evaluated on
+        # the same rows — metrics were systematically inflated and the deployed
+        # calibrator trained on only ~200 rows while discarding the base
+        # model's 800-row fit.
         calibrated = CalibratedClassifierCV(model, cv=5, method='sigmoid')
-        calibrated.fit(test_df[available_features], test_df[target_column].astype(int))
+        calibrated.fit(train_df[available_features], train_df[target_column].astype(int))
 
         # Evaluate
         proba = calibrated.predict_proba(test_df[available_features])[:, 1]
@@ -180,7 +184,7 @@ class EarlySignalModel:
             self.short_model = model
             self.short_calibrated = calibrated
 
-        self.feature_importance = importance
+        self.feature_importance[side] = importance
         self.metadata = report
 
         return report
@@ -276,10 +280,10 @@ class EarlySignalModel:
         model.metadata = bundle["metadata"]
         return model
 
-    def get_top_features(self, n: int = 10) -> List[Dict[str, float]]:
+    def get_top_features(self, n: int = 10, side: str = "short") -> List[Dict[str, float]]:
         """Get top N most important features."""
         sorted_features = sorted(
-            self.feature_importance.items(),
+            self.feature_importance.get(side, {}).items(),
             key=lambda x: x[1],
             reverse=True
         )

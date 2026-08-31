@@ -97,6 +97,23 @@ class ContextAnalyzer:
     """Analyzes market context for adaptive decision making."""
 
     @staticmethod
+    def _num(row: pd.Series, key: str, default: float) -> float:
+        """Read a numeric feature, mapping None/NaN to the default.
+
+        `x or default` does not catch NaN (NaN is truthy), so a single NaN
+        feature previously propagated into bias arithmetic and silently
+        disabled every comparison it appeared in.
+        """
+        val = row.get(key, default)
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            return default
+        if val != val:  # NaN check
+            return default
+        return val
+
+    @staticmethod
     def analyze(row: pd.Series, regime_info: Optional[dict] = None) -> MarketContext:
         """
         Comprehensive market context analysis.
@@ -104,18 +121,18 @@ class ContextAnalyzer:
         This replaces simple regime detection with multi-dimensional analysis.
         """
         # Extract key metrics from features
-        ema_8_vs_21 = float(row.get("ema_8_vs_21", 0.0) or 0.0)
-        ema_slope_8 = float(row.get("ema_slope_8", 0.0) or 0.0)
-        atr_pct = float(row.get("atr_pct_14", 0.005) or 0.005)
-        rsi = float(row.get("rsi_14", 50.0) or 50.0)
-        close_position = float(row.get("bar_close_position", 0.5) or 0.5)
-        volume_zscore = float(row.get("vol_zscore", 0.0) or 0.0)
-        ob_imbalance = float(row.get("ob_imbalance_top_10", 0.0) or 0.0)
-        trade_flow = float(row.get("trade_flow_imbalance", 0.0) or 0.0)
+        ema_8_vs_21 = ContextAnalyzer._num(row, "ema_8_vs_21", 0.0)
+        ema_slope_8 = ContextAnalyzer._num(row, "ema_slope_8", 0.0)
+        atr_pct = ContextAnalyzer._num(row, "atr_pct_14", 0.005)
+        rsi = ContextAnalyzer._num(row, "rsi_14", 50.0)
+        close_position = ContextAnalyzer._num(row, "bar_close_position", 0.5)
+        volume_zscore = ContextAnalyzer._num(row, "vol_zscore", 0.0)
+        ob_imbalance = ContextAnalyzer._num(row, "ob_imbalance_top_10", 0.0)
+        trade_flow = ContextAnalyzer._num(row, "trade_flow_imbalance", 0.0)
 
         # Higher timeframe trend (using 60m features if available)
-        tf60_rsi = float(row.get("tf60_rsi_14", 50.0) or 50.0)
-        tf60_ret_3 = float(row.get("tf60_ret_3", 0.0) or 0.0)
+        tf60_rsi = ContextAnalyzer._num(row, "tf60_rsi_14", 50.0)
+        tf60_ret_3 = ContextAnalyzer._num(row, "tf60_ret_3", 0.0)
 
         # === TREND ANALYSIS ===
         # Composite trend strength from multiple indicators
@@ -180,7 +197,7 @@ class ContextAnalyzer:
             key_level_proximity = "in_no_mans_land"
 
         # === LIQUIDITY ANALYSIS ===
-        spread_bps = float(row.get("ob_spread_bps", 5.0) or 5.0)
+        spread_bps = ContextAnalyzer._num(row, "ob_spread_bps", 5.0)
 
         if spread_bps < 3:
             liquidity_condition = "thick"

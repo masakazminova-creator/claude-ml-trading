@@ -274,16 +274,13 @@ class OnChainAnalyzer:
                 data = response.json()
                 market_data = data.get('market_data', {})
 
-                # Get market cap and realized cap (if available)
-                market_cap = market_data.get('market_cap', {}).get('usd')
-                realized_cap = market_data.get('total_value_locked', {}).get('usd')  # Approximation
-
-                if market_cap and realized_cap and realized_cap > 0:
-                    mvrv = market_cap / realized_cap
-                    return {'mvrv': mvrv}
-                else:
-                    # Return None - will be handled gracefully
-                    return {'mvrv': None}
+                # NOTE: CoinGecko has no realized cap; its total_value_locked
+                # is DeFi TVL (~$5-15B), NOT realized cap (~$600B). Dividing
+                # market cap by TVL produced MVRV ~50-300 (real value is
+                # 1-3), so `undervalued_zone` was permanently False. Better to
+                # return None (feature degrades gracefully) than a garbage
+                # number — a real MVRV needs a paid on-chain API.
+                return {'mvrv': None}
             else:
                 return None
 
@@ -383,7 +380,12 @@ class OnChainAnalyzer:
         else:
             features['accumulation_signal'] = False
 
-        if data.funding_rate_avg and data.funding_rate_avg < -0.01:
+        # Funding squeeze: Binance lastFundingRate is per-8h (~0.0001 typical),
+        # _fetch_funding_rates already converts to daily (x3). Threshold is
+        # therefore -1%/day — previously compared against the raw 8h rate's
+        # scale with a -0.01 cutoff that never fired either way; -0.003/day
+        # (extremely crowded shorts) is a realistic squeeze trigger.
+        if data.funding_rate_avg is not None and data.funding_rate_avg < -0.003:
             features['potential_squeeze'] = True  # Negative funding
         else:
             features['potential_squeeze'] = False

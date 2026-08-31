@@ -56,19 +56,22 @@ class ATRPercentileAnalyzer:
 
         self.history[symbol].append(atr_pct)
 
-    def analyze(self, symbol: str, current_atr_pct: float) -> ATRPercentileResult:
+    def analyze(self, symbol: str, current_atr_pct: float, record: bool = True) -> ATRPercentileResult:
         """
         Analyze current ATR in context of historical values.
 
         Args:
             symbol: Trading symbol
             current_atr_pct: Current ATR as percentage
+            record: Keep True for per-bar sampling from runtime. When False,
+                analyze without appending (avoids double-counting the same bar).
 
         Returns:
             ATRPercentileResult with recommendations
         """
         # Update history
-        self.update(symbol, current_atr_pct)
+        if record:
+            self.update(symbol, current_atr_pct)
 
         # Need at least 30 samples for meaningful percentile
         if symbol not in self.history or len(self.history[symbol]) < 30:

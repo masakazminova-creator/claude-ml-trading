@@ -104,9 +104,11 @@ class ContinuousLearningEngine:
         self.min_trades_for_check = 50       # Need at least 50 trades to check
 
         # Adaptive retraining config
-        self.base_retrain_interval_trades = 50  # Base interval (was 100, check more often)
-        self.min_retrain_interval_trades = 10    # Minimum in high volatility (was 20)
-        self.max_retrain_interval_trades = 100   # Maximum in low volatility (was 200)
+        # Read from config with backward-compatible fallbacks (these were
+        # hardcoded, so RETRAIN_INTERVAL_TRADES in .env did nothing).
+        self.base_retrain_interval_trades = int(getattr(self.settings, 'retrain_interval_trades', 100) * 0.5)  # 50 by default: check more often than configured base
+        self.min_retrain_interval_trades = 10    # Minimum in high volatility
+        self.max_retrain_interval_trades = int(getattr(self.settings, 'retrain_interval_trades', 100))
 
         self.base_training_lookback_bars = 1000  # Base lookback (~10 days on 15m, was 2000)
         self.min_training_lookback_bars = 300    # Minimum in fast markets (~3 days, was 500)
@@ -412,7 +414,9 @@ class ContinuousLearningEngine:
         if not model_dir.exists():
             return None
 
-        model_files = list(model_dir.glob("*.joblib"))
+        # Only count LIVE model files — *_new.joblib candidates are never
+        # promoted as-is and would skew the age-based retrain trigger.
+        model_files = [f for f in model_dir.glob("*.joblib") if not f.name.endswith("_new.joblib")]
         if not model_files:
             return None
 

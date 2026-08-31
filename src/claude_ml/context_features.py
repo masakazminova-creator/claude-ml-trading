@@ -7,13 +7,21 @@ Collects real-time data from:
 - OKX funding rate & open interest (derivatives sentiment)
 
 Returns a dict of features to merge with the main feature set.
+
+IMPORTANT: failed fetches yield float("nan"), NOT 0.0. A zero funding rate or
+zero OI change is a real market signal ("perfectly neutral"); writing it on
+API failure silently poisons the feature with fake certainty. NaN is
+explicitly "no data" and every consumer handles NaN as neutral/missing.
 """
 
 import logging
+import math
 import requests
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+NAN = float("nan")
 
 
 class ContextFeatureCollector:
@@ -25,28 +33,31 @@ class ContextFeatureCollector:
         self.dxy_proxy_url = None  # Could be set to a lightweight API if available
 
     def get_all_context(self) -> Dict[str, float]:
-        """Return all context features as a flat dict."""
+        """Return all context features as a flat dict.
+
+        Failed fetches produce NaN (unknown), not a fake-neutral default.
+        """
         features = {}
 
         # 1. ETH/BTC ratio (crypto risk-on/off)
         eth_btc_ratio = self._get_eth_btc_ratio()
-        features["eth_btc_ratio"] = eth_btc_ratio if eth_btc_ratio else 0.055  # default ~0.055
+        features["eth_btc_ratio"] = eth_btc_ratio if eth_btc_ratio is not None else NAN
 
         # 2. ETH trend (15m return %)
         eth_return = self._get_symbol_return("ETH-USDT-SWAP")
-        features["eth_15m_return_pct"] = eth_return if eth_return else 0.0
+        features["eth_15m_return_pct"] = eth_return if eth_return is not None else NAN
 
         # 3. BTC funding rate (OKX perpetual)
         funding_rate = self._get_funding_rate("BTC-USDT-SWAP")
-        features["btc_funding_rate"] = funding_rate if funding_rate else 0.0
+        features["btc_funding_rate"] = funding_rate if funding_rate is not None else NAN
 
         # 4. BTC open interest change (%)
         oi_change = self._get_oi_change("BTC-USDT-SWAP")
-        features["btc_oi_change_pct"] = oi_change if oi_change else 0.0
+        features["btc_oi_change_pct"] = oi_change if oi_change is not None else NAN
 
-        # 5. Macro risk proxy (SPX 15m return if available, else 0)
+        # 5. Macro risk proxy (SPX 15m return if available)
         spx_return = self._get_spx_proxy_return()
-        features["spx_15m_return_pct"] = spx_return if spx_return else 0.0
+        features["spx_15m_return_pct"] = spx_return if spx_return is not None else NAN
 
         return features
 

@@ -98,10 +98,13 @@ class CrossMarketAnalyzer:
         except Exception as e:
             logger.warning(f"Failed to fetch cross-market data: {e}")
 
-            # Return last known good data or empty
-            if self._cache:
+            # Return last known good data only if it is still recent. Serving
+            # days-old cached data forever (e.g. during a long Yahoo 429
+            # streak) fed the model a stale market snapshot with no staleness
+            # signal — downstream never checks data_quality.
+            if self._cache and (now - self._last_fetch_time) < self.cache_ttl * 10:
                 old_data = self._cache['data']
-                old_data.data_quality = 0.5  # Mark as stale
+                old_data.data_quality = 0.3  # Mark as degraded
                 return old_data
             else:
                 return CrossMarketData()

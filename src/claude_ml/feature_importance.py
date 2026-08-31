@@ -140,8 +140,11 @@ class OnlineFeatureSelector:
                 noise_ratio <= self.max_noise_ratio):
                 new_active_features.append(feature)
 
-        # Update active features
-        old_count = len(self.active_features)
+        # Update active features (compute the diff BEFORE overwriting — the
+        # old code reassigned self.active_features first, then diffed it
+        # against itself, so "added"/"removed" were always empty)
+        old_features = list(self.active_features)
+        old_count = len(old_features)
         new_count = len(new_active_features)
 
         self.active_features = new_active_features
@@ -150,8 +153,8 @@ class OnlineFeatureSelector:
         if old_count != new_count:
             logger.info(f"[FEATURE UPDATE] Active features: {old_count} → {new_count}")
 
-        added = set(new_active_features) - set(self.active_features[:old_count])
-        removed = set(self.active_features[:old_count]) - set(new_active_features)
+        added = set(new_active_features) - set(old_features)
+        removed = set(old_features) - set(new_active_features)
 
         if added:
             logger.debug(f"  Added: {', '.join(list(added)[:5])}")

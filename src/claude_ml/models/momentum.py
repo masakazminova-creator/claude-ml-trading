@@ -148,9 +148,10 @@ class MomentumModel:
         model = self.create_model()
         model.fit(train_df[available_features], train_df[target_col].astype(int))
 
-        # Calibrate
+        # Calibrate via CV on the TRAIN split (honest test metrics, full-data
+        # calibrator) — previously fit on the test split.
         calibrated = CalibratedClassifierCV(model, cv=5, method='sigmoid')
-        calibrated.fit(test_df[available_features], test_df[target_col].astype(int))
+        calibrated.fit(train_df[available_features], train_df[target_col].astype(int))
 
         # Store
         if side == "long":
@@ -170,7 +171,7 @@ class MomentumModel:
             random_state=42,
         )
 
-        self.feature_importance = {
+        self.feature_importance[side] = {
             name: float(score)
             for name, score in zip(available_features, importance.importances_mean, strict=False)
         }
@@ -206,13 +207,24 @@ class MomentumModel:
         # Predict
         proba = float(calibrated.predict_proba(features_df)[0, 1])
 
-        # Determine direction
-        if proba > 0.60:
+        # Direction thresholds derive from self.threshold (adaptive override
+        # support): threshold acts as the with-momentum cutoff, mirrored below.
+        # Previously hardcoded 0.60/0.40 — the runtime's adaptive momentum
+        # threshold was silently ignored.
+        with_cut = self.threshold
+        against_cut = 1.0 - self.threshold
+        if proba > with_cut + 0.10:
             direction = "with_momentum"
-            strength = "strong" if proba > 0.70 else "moderate"
-        elif proba < 0.40:
+            strength = "strong" if proba > with_cut + 0.20 else "moderate"
+        elif proba > with_cut:
+            direction = "with_momentum"
+            strength = "moderate"
+        elif proba < against_cut - 0.10:
             direction = "against_momentum"
-            strength = "strong" if proba < 0.30 else "moderate"
+            strength = "strong" if proba < against_cut - 0.20 else "moderate"
+        elif proba < against_cut:
+            direction = "against_momentum"
+            strength = "moderate"
         else:
             direction = "neutral"
             strength = "weak"

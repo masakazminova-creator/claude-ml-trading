@@ -73,6 +73,7 @@ class TradingBot:
 
     async def balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /balance command."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("PRAGMA journal_mode=WAL")
@@ -87,7 +88,7 @@ class TradingBot:
             # Get all CLOSED trades PnL (not open positions)
             cursor.execute("""
                 SELECT pnl_pct FROM paper_trades
-                WHERE status = 'closed'
+                WHERE status IN ('closed', 'shadow_closed')
                   AND exit_ts IS NOT NULL
                   AND ABS(pnl_pct) > 0.01
                 ORDER BY id
@@ -109,7 +110,7 @@ class TradingBot:
             # Get REAL trade count (exclude trades with very small PnL - likely test/duplicate)
             cursor.execute("""
                 SELECT COUNT(*) FROM paper_trades
-                WHERE status = 'closed'
+                WHERE status IN ('closed', 'shadow_closed')
                   AND exit_ts IS NOT NULL
                   AND ABS(pnl_pct) > 0.01
             """)
@@ -121,7 +122,7 @@ class TradingBot:
                     SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
                     COUNT(*) as total
                 FROM paper_trades
-                WHERE status = 'closed'
+                WHERE status IN ('closed', 'shadow_closed')
                   AND exit_ts IS NOT NULL
                   AND ABS(pnl_pct) > 0.01
             """)
@@ -167,9 +168,13 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error in balance command: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка получения баланса: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
 
     async def trades(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /trades command."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("PRAGMA journal_mode=WAL")
@@ -225,9 +230,13 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error in trades command: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка получения сделок: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
 
     async def position(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /position command - show current open position details."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("PRAGMA journal_mode=WAL")
@@ -380,9 +389,13 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error in position command: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка получения позиции: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
 
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("PRAGMA journal_mode=WAL")
@@ -421,6 +434,9 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error in status command: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Ошибка получения статуса: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle text messages from keyboard buttons."""
@@ -441,9 +457,15 @@ class TradingBot:
         """Handle inline button clicks."""
         query = update.callback_query
 
-        # Create a fake update object with the original message for command handlers
+        # Create a fake update object with the original message for command handlers.
+        # Old messages (>48h) arrive as InaccessibleMessage with no usable
+        # chat/reply context — the handlers' reply_text would raise
+        # AttributeError inside the except handler itself. Guard both cases.
         from telegram import Message
         fake_update = update
+        if query.message is not None and not getattr(query.message, "text", None) and not getattr(query.message, "chat", None):
+            await query.answer("Сообщение устарело — отправьте команду заново", show_alert=True)
+            return
         if query.message:
             # Create a proper update with message
             fake_update = Update(

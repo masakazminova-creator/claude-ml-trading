@@ -199,8 +199,11 @@ class ConfirmationModel:
 
         if calibrate:
             print(f"[{side}] Applying Platt scaling for calibration...")
+            # Calibrate via CV on the TRAIN split so the untouched test split
+            # gives honest metrics (previously calibrator was fit AND
+            # evaluated on test_df — inflated, and trained on ~200 rows).
             calibrated = CalibratedClassifierCV(model, cv=5, method='sigmoid')
-            calibrated.fit(test_df[available_features], test_df[target_column].astype(int))
+            calibrated.fit(train_df[available_features], train_df[target_column].astype(int))
 
             cal_proba = calibrated.predict_proba(test_df[available_features])[:, 1]
             cal_pred = (cal_proba >= (self.threshold_long if side == "long" else self.threshold_short)).astype(int)
@@ -243,7 +246,7 @@ class ConfirmationModel:
             self.short_model = model
             self.short_calibrated = calibrated_model
 
-        self.feature_importance = feature_imp
+        self.feature_importance[side] = feature_imp
         self.metadata = {
             "side": side,
             "train_rows": int(len(train_df)),
@@ -359,9 +362,10 @@ class ConfirmationModel:
             model = self.create_model()
             model.fit(train_df[available_features], train_df[target_column].astype(int))
 
-            # Calibrate
-            calibrated = CalibratedClassifierCV(model, cv=5, method='sigmoid')
-            calibrated.fit(test_df[available_features], test_df[target_column].astype(int))
+            # Calibrate on the train portion (walk-forward: calibration must
+            # not see the evaluation rows)
+            calibrated = CalibratedClassifierCV(model, cv=3, method='sigmoid')
+            calibrated.fit(train_df[available_features], train_df[target_column].astype(int))
 
             # Evaluate
             proba = calibrated.predict_proba(test_df[available_features])[:, 1]
@@ -434,10 +438,10 @@ class ConfirmationModel:
         model.metadata = bundle["metadata"]
         return model
 
-    def get_top_features(self, n: int = 10) -> List[Dict[str, float]]:
+    def get_top_features(self, n: int = 10, side: str = "short") -> List[Dict[str, float]]:
         """Get top N most important features."""
         sorted_features = sorted(
-            self.feature_importance.items(),
+            self.feature_importance.get(side, {}).items(),
             key=lambda x: x[1],
             reverse=True,
         )

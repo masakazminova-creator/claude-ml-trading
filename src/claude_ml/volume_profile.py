@@ -237,17 +237,21 @@ class VolumeProfileAnalyzer:
 
                 # Check if this bar spans our price level
                 if bar_low <= level_price <= bar_high:
-                    # Approximate volume at this level
-                    level_volume += bar_volume / ((bar_high - bar_low) / level_size + 1)
+                    # Approximate volume at this level (per-bar increment)
+                    bar_level_volume = bar_volume / ((bar_high - bar_low) / level_size + 1)
+                    level_volume += bar_level_volume
                     trade_count += 1
 
-                    # Estimate buy/sell split based on close position
-                    if bar_close > level_price:
-                        level_buy_volume += level_volume * 0.6
-                        level_sell_volume += level_volume * 0.4
+                    # Estimate buy/sell split from THIS bar's increment (the
+                    # old code added 0.6x the cumulative level volume per bar,
+                    # inflating buy/sell totals ~n/2x). Close above the level
+                    # means buyers were in control of that bar.
+                    if bar_close >= level_price:
+                        level_buy_volume += bar_level_volume * 0.6
+                        level_sell_volume += bar_level_volume * 0.4
                     else:
-                        level_sell_volume += level_volume * 0.6
-                        level_buy_volume += level_volume * 0.4
+                        level_sell_volume += bar_level_volume * 0.6
+                        level_buy_volume += bar_level_volume * 0.4
 
             if level_volume > 0:
                 profile.append(VolumeProfileLevel(
@@ -305,14 +309,18 @@ class VolumeProfileAnalyzer:
         avg_body = abs(recent['close'] - recent['open']).mean()
 
         # Absorption signature: high volume + small bodies
-        volume_spike = avg_volume > df['volume'].rolling(50).mean() * 2
+        baseline = df['volume'].rolling(50).mean().iloc[-1]
+        volume_spike = bool(avg_volume > baseline * 2)
         small_bodies = avg_body < avg_range * 0.3
 
         absorption = bool(volume_spike and small_bodies)
 
-        # Determine side (buying vs selling absorption)
-        closes_near_low = (recent['close'] - recent['low']) / (recent['high'] - recent['low'] + 0.0001) < 0.3
-        buying_pressure = closes_near_low.sum() > window / 2
+        # Determine side (buying vs selling absorption). Closes near the HIGH
+        # of the bar mean buyers absorbed selling pressure; the old code
+        # labeled closes-near-low as "buying" — inverted.
+        close_position = (recent['close'] - recent['low']) / (recent['high'] - recent['low'] + 0.0001)
+        closes_near_high = close_position > 0.7
+        buying_pressure = bool(closes_near_high.sum() > window / 2)
 
         return {
             'absorption_detected': absorption,
