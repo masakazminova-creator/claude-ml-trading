@@ -363,24 +363,24 @@ def attach_labels(
     short_min_return_pct: float | None = None,
     short_max_adverse_up_pct: float | None = None,
 ) -> pd.DataFrame:
-    """Label each bar with the realized PnL% of a simulated trade.
+    """Label each bar with realized PnL% of simulated long/short trades.
 
-    Instead of predicting whether price will rise/fall, we simulate an actual
-    trade with TP cap (trailing activation), fixed SL, and a simple trailing
-    mechanism. The label is the net PnL% after costs — this is what the model
-    should learn to predict for online learning.
+    Simulates an actual trade per side with TP cap (trailing activation), fixed
+    SL, and a simple trailing mechanism — same exit logic as the live system.
 
-    Simulation logic (long side):
-    - Entry at bar close.
-    - TP trigger at entry * (1 + take_profit_pct/100) → activates trailing.
-    - Fixed SL at entry * (1 - stop_loss_pct/100).
-    - Once TP triggered, trailing follows high with give-back cap (0.5%).
-    - Exit when trailing hit or max_hold_bars reached.
-    - Short side mirrors long.
+    Columns produced:
+    - long_pnl_pct / short_pnl_pct: continuous realized PnL% per side
+      (kept for future regression-based online learning).
+    - long_target / short_target: BINARY labels (1 = simulated trade was
+      profitable, 0 = not). The models are classifiers and need binary targets
+      — a previous change wired the continuous pnl into these columns, which
+      collapsed everything to class 0 and crashed retraining with
+      "index 1 is out of bounds for axis 1 with size 1".
     """
     labeled = df.copy().reset_index(drop=True)
 
-    realized_pnl: list[float | None] = []
+    long_pnls: list[float | None] = []
+    short_pnls: list[float | None] = []
     best_returns: list[float | None] = []
     worst_returns: list[float | None] = []
 
@@ -392,7 +392,8 @@ def attach_labels(
         entry_price = float(labeled.at[idx, "close"])
         future_slice = labeled.iloc[idx + 1 : idx + 1 + max_hold_bars]
         if future_slice.empty:
-            realized_pnl.append(None)
+            long_pnls.append(None)
+            short_pnls.append(None)
             best_returns.append(None)
             worst_returns.append(None)
             continue
@@ -429,8 +430,10 @@ def attach_labels(
                     exited = True
                     break
 
-        if not exited and trailing_active:
-            exit_price_long = closes[-1]  # exit at last close if trailing never hit
+        if not exited:
+            # Timeout: no SL hit. If trailing armed, exit at trailing level
+            # semantics via last close; otherwise flat exit at last close.
+            exit_price_long = closes[-1]
 
         long_pnl = ((exit_price_long - entry_price) / entry_price) * 100
 
@@ -459,22 +462,25 @@ def attach_labels(
                     exited_s = True
                     break
 
-        if not exited_s and trailing_active_s:
+        if not exited_s:
+            # Timeout: no SL hit — exit at last close, not at SL level.
             exit_price_short = closes[-1]
 
         short_pnl = ((entry_price - exit_price_short) / entry_price) * 100
 
-        # Use average of long and short as the label (model picks side later)
-        avg_pnl = (long_pnl + short_pnl) / 2.0
-        realized_pnl.append(avg_pnl)
+        long_pnls.append(long_pnl)
+        short_pnls.append(short_pnl)
         best_returns.append(((highs.max() / entry_price) - 1.0) * 100)
         worst_returns.append(((lows.min() / entry_price) - 1.0) * 100)
 
     labeled["future_best_return_pct"] = best_returns
     labeled["future_worst_return_pct"] = worst_returns
-    labeled["realized_pnl_pct"] = realized_pnl
-    labeled["long_target"] = pd.Series(realized_pnl, dtype="float")
-    labeled["short_target"] = pd.Series(realized_pnl, dtype="float")
+    labeled["long_pnl_pct"] = long_pnls
+    labeled["short_pnl_pct"] = short_pnls
+    # Binary targets for the classifiers: 1 = simulated trade for that side
+    # was profitable (pnl covers costs), 0 = not.
+    labeled["long_target"] = [1 if p is not None and p > 0 else 0 for p in long_pnls]
+    labeled["short_target"] = [1 if p is not None and p > 0 else 0 for p in short_pnls]
     return labeled
 
 

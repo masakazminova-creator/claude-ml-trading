@@ -108,9 +108,11 @@ class ContextFeatureCollector:
             )
             if r.status_code == 200:
                 data = r.json().get("data", [])
-                if len(data) >= 2:
-                    oi_now = float(data[0]["oi"])
-                    oi_prev = float(data[1]["oi"])
+                # API returns rows as arrays: [ts, oi, oiCcy, oiCcyQuote] —
+                # indexing with ["oi"] raised TypeError every cycle.
+                if len(data) >= 2 and isinstance(data[0], (list, tuple)):
+                    oi_now = float(data[0][1])
+                    oi_prev = float(data[1][1])
                     if oi_prev > 0:
                         return ((oi_now - oi_prev) / oi_prev) * 100
         except Exception as e:
