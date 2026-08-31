@@ -175,7 +175,7 @@ class TestPositionSizing:
         """TP (trailing-activation trigger) is capped at max_take_profit_pct.
 
         A far ATR-based TP (2.5x here = 5%) would be hunted and often reversed
-        into a loss; the cap arms the trailing stop sooner at +0.80% / -0.80%.
+        into a loss; the cap arms the trailing stop sooner at +1.00% / -1.00%.
         """
         long_result = self.risk_manager.calculate_position_size(
             symbol="BTCUSDT", entry_price=50000.0, atr=1000.0,
@@ -185,9 +185,9 @@ class TestPositionSizing:
             symbol="BTCUSDT", entry_price=50000.0, atr=1000.0,
             regime="trend_up", model_confidence=0.75, side="short",
         )
-        # 1.50% of 50000 = 750 -> capped TP distance
-        assert abs(long_result.take_profit_price - 50750.0) < 0.01
-        assert abs(short_result.take_profit_price - 49250.0) < 0.01
+        # 1.00% of 50000 = 500 -> capped TP distance
+        assert abs(long_result.take_profit_price - 50500.0) < 0.01
+        assert abs(short_result.take_profit_price - 49500.0) < 0.01
 
 
     def test_stop_loss_floored_at_min_pct(self):
