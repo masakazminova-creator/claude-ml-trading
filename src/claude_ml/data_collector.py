@@ -247,14 +247,12 @@ class OKXCollector:
         frame["ts"] = pd.to_datetime(frame["start_time"].astype("int64"), unit="ms", utc=True)
         for col in ["open", "high", "low", "close", "volume", "turnover"]:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
-        # Drop the still-forming candle (confirm='0') so decisions are never
-        # made on a partial bar — its indicator values can appear and vanish
-        # before close.
-        if "confirm" in frame.columns and len(frame) > 1:
-            confirmed = frame["confirm"].astype(str) == "1"
-            if confirmed.any():
-                frame = frame[confirmed]
-        return frame[["ts", "open", "high", "low", "close", "volume", "turnover"]].dropna().reset_index(drop=True)
+        # Keep the confirm column through pagination: dropping the still-forming
+        # candle HERE shrinks every page by one row (100 -> 99), which makes
+        # fetch_history stop early (len(chunk) < batch_limit) and returned 99
+        # candles instead of the full lookback — retraining got 1/10th of the
+        # data. The forming candle is dropped in fetch_history after pagination.
+        return frame[["ts", "open", "high", "low", "close", "volume", "turnover", "confirm"]].dropna(subset=["ts", "open", "high", "low", "close", "volume"]).reset_index(drop=True)
 
     def fetch_history(self, symbol: str, interval: str, lookback_bars: int) -> pd.DataFrame:
         chunks: list[pd.DataFrame] = []
@@ -276,6 +274,15 @@ class OKXCollector:
             raise RuntimeError("Не удалось получить историю свечей")
         frame = pd.concat(chunks, ignore_index=True)
         frame = frame.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+        # Drop the still-forming candle (confirm='0') only AFTER pagination is
+        # complete — dropping it per-page made every page one row short, which
+        # tripped the early-exit above and returned 99 candles instead of the
+        # full lookback (retraining got 1/10th of its data).
+        if "confirm" in frame.columns and len(frame) > 1:
+            confirmed = frame["confirm"].astype(str) == "1"
+            if confirmed.any():
+                frame = frame[confirmed]
+        frame = frame[["ts", "open", "high", "low", "close", "volume", "turnover"]].reset_index(drop=True)
         if len(frame) > lookback_bars:
             frame = frame.iloc[-lookback_bars:].reset_index(drop=True)
         return frame
