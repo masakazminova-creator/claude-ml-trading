@@ -406,6 +406,114 @@ class ContinuousLearningEngine:
 
         return retrain_interval, lookback_bars
 
+    def _calibrate_thresholds(
+        self,
+        labeled: pd.DataFrame,
+        early_model,
+        confirm_model,
+        momentum_model,
+        percentile: float = 90.0,
+    ) -> None:
+        """Set base thresholds from the new models' real score distributions.
+
+        Scores each of the last ~300 labeled bars with the freshly promoted
+        models, takes the `percentile`-th percentile per model type, and
+        persists the result to runtime_state. runtime's AdaptiveThresholdEngine
+        picks these up as base thresholds on its next state reload.
+
+        This keeps the meaning of the threshold stable ("top 10% of setups")
+        even when a retrained model's absolute score range shifts. The old
+        fixed 0.66 became unreachable after honest realized-PnL labels moved
+        confirmation scores to 0.37-0.53 — zero trades ever.
+        """
+        recent = labeled.tail(300)
+        if len(recent) < 100:
+            logger.info("[CALIBRATE] Not enough rows to calibrate (need 100+)")
+            return
+
+        import numpy as np
+
+        def _two_sided_scores(predict_fn):
+            vals = []
+            for _, row in recent.iterrows():
+                try:
+                    for side in ("long", "short"):
+                        res = predict_fn(row, side)
+                        if res is not None:
+                            vals.append(float(res.score))
+                except Exception:
+                    continue
+            return vals
+
+        calibrated = {}
+
+        # Confirmation model (score == probability*100, two-sided)
+        c_vals = _two_sided_scores(
+            lambda row, side: confirm_model.predict(row, side=side, regime="flat")
+        )
+        if len(c_vals) >= 50:
+            conf_pct = float(np.percentile(c_vals, percentile)) / 100.0
+            calibrated["confirmation_threshold"] = round(min(max(conf_pct, 0.50), 0.80), 3)
+
+        # Early signal model: use raw probabilities — predict() filters
+        # everything below the current threshold and would return None for
+        # every row when the threshold is stale-high.
+        e_vals = []
+        if hasattr(early_model, "predict_proba_raw"):
+            for _, row in recent.iterrows():
+                try:
+                    for side in ("long", "short"):
+                        p = early_model.predict_proba_raw(row, side)
+                        if p is not None:
+                            e_vals.append(float(p))
+                except Exception:
+                    continue
+        else:
+            for _, row in recent.iterrows():
+                try:
+                    for side in ("long", "short"):
+                        res = early_model.predict(row, side=side, regime="flat")
+                        if res is not None:
+                            e_vals.append(float(res.probability))
+                except Exception:
+                    continue
+        if len(e_vals) >= 50:
+            cal_pct = float(np.percentile(e_vals, percentile))
+            calibrated["early_signal_threshold"] = round(min(max(cal_pct, 0.45), 0.75), 3)
+
+        # Momentum model (score == probability*100, two-sided)
+        m_vals = _two_sided_scores(
+            lambda row, side: momentum_model.predict(row, side=side)
+        )
+        if len(m_vals) >= 50:
+            mom_pct = float(np.percentile(m_vals, percentile)) / 100.0
+            calibrated["momentum_threshold"] = round(min(max(mom_pct, 0.45), 0.70), 3)
+
+        if not calibrated:
+            logger.warning("[CALIBRATE] No model produced scores — thresholds unchanged")
+            return
+
+        # Persist into the same runtime_state blob AdaptiveThresholdEngine reads
+        try:
+            row = self.conn.execute(
+                "SELECT value FROM runtime_state WHERE key = 'adaptive_thresholds'"
+            ).fetchone()
+            state = json.loads(row[0]) if row else {}
+        except Exception:
+            state = {}
+
+        entry = state.get("BTCUSDT", {})
+        entry.update(calibrated)
+        entry["last_updated"] = datetime.now(timezone.utc).isoformat()
+        state["BTCUSDT"] = entry
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO runtime_state (key, value) VALUES (?, ?)",
+            ("adaptive_thresholds", json.dumps(state)),
+        )
+        self.conn.commit()
+        logger.info(f"[CALIBRATE] ✓ Thresholds auto-calibrated at p{percentile:.0f}: {calibrated}")
+
     def _get_model_age_hours(self) -> Optional[float]:
         """Get the age of the oldest model in hours."""
         from pathlib import Path
@@ -654,6 +762,20 @@ class ContinuousLearningEngine:
             logger.info("[RETRAIN] ✓ Models promoted to live filenames")
         except Exception as e:
             logger.warning(f"[RETRAIN] Promotion failed: {e}")
+
+        # Auto-calibrate thresholds to the new model's real score distribution.
+        # A retrained model can shift its whole probability range (honest
+        # realized-PnL labels produce scores ~0.37-0.53 where old label
+        # calibration expected 0.7+). A fixed 0.66 confirmation threshold then
+        # becomes unreachable and the bot never trades. Store the 90th
+        # percentile of the new model's scores on recent data as the base
+        # threshold — "enter only on the top ~10% of setups", recalculated
+        # after every retrain.
+        if promoted:
+            try:
+                self._calibrate_thresholds(labeled_early, early_model, confirm_model, momentum_model)
+            except Exception as e:
+                logger.warning(f"[RETRAIN] Threshold auto-calibration failed: {e}")
 
         result = RetrainingResult(
             triggered=True,

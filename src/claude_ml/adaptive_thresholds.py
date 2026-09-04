@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -100,6 +101,12 @@ class AdaptiveThresholdEngine:
 
         # Load saved threshold state from database
         self._load_state()
+
+        # Retraining recalibrates base thresholds (continuous_learning.
+        # _calibrate_thresholds writes the same runtime_state blob). Reload it
+        # periodically so runtime picks up new thresholds without a restart.
+        self._last_state_reload = time.time()
+        self._state_reload_interval = 600  # seconds
 
     def _load_symbol_characteristics(self) -> Dict[str, SymbolCharacteristics]:
         """Load historical performance data for each symbol from database."""
@@ -234,6 +241,16 @@ class AdaptiveThresholdEngine:
         Returns:
             Adjusted threshold value
         """
+        # Periodically re-read base thresholds from runtime_state: retraining
+        # recalibrates them (see continuous_learning._calibrate_thresholds).
+        now_ts = time.time()
+        if now_ts - self._last_state_reload >= self._state_reload_interval:
+            self._last_state_reload = now_ts
+            try:
+                self._load_state()
+            except Exception as e:
+                print(f"[ADAPTIVE] State reload failed: {e}")
+
         # Get base threshold
         base = self.base_thresholds.get(symbol)
         if not base:

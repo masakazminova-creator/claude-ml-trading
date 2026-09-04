@@ -189,6 +189,20 @@ class EarlySignalModel:
 
         return report
 
+    def predict_proba_raw(self, row: pd.Series, side: str) -> Optional[float]:
+        """Raw calibrated probability without threshold filtering.
+
+        Used by threshold auto-calibration: `predict` returns None for
+        everything below self.threshold, so with a stale threshold it yields
+        no data at all and the threshold could never recalibrate itself.
+        """
+        calibrated = self.long_calibrated if side == "long" else self.short_calibrated
+        if calibrated is None:
+            return None
+        available_features = [f for f in EARLY_SIGNAL_FEATURES if f in row.index]
+        features_df = row[available_features].to_frame().T
+        return float(calibrated.predict_proba(features_df)[0, 1])
+
     def predict(
         self,
         row: pd.Series,
