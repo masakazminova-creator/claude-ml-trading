@@ -359,7 +359,11 @@ class ContextAnalyzer:
         required_confidence = base_confidence + clarity_adjustment + vol_adjustment + level_adjustment
         if model_scale > 0:
             # Anchor-aware clamp: never above the model's realistic ceiling
-            required_confidence = max(min(required_confidence, model_scale + 0.05), 0.35)
+            # Clamp at the model's realistic score ceiling (replayed p95 ≈
+            # 0.82 on recent bars). Unclear market (+0.10 clarity penalty)
+            # would otherwise push the gate above anything the model can
+            # express and silently re-enable the never-trades bug.
+            required_confidence = max(min(required_confidence, 0.82), 0.35)
         else:
             required_confidence = max(min(required_confidence, 0.90), 0.60)  # Clamp between 60-90%
 
