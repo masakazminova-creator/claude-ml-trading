@@ -452,8 +452,10 @@ class RuntimeEngine:
         self._log_health("ok", f"Processed {len(self.settings.symbols)} symbols")
         logger.debug("Health logged")
 
-        # Save adaptive thresholds state
-        self.threshold_engine.save_state()
+        # NOTE: threshold_engine.save_state() was called here every cycle,
+        # overwriting the recalibrated thresholds that retraining writes to
+        # runtime_state — calibration was clobbered within one poll cycle.
+        # The engine persists state itself when thresholds actually change.
 
     def _check_and_retrain(self) -> None:
         """Check performance and retrain models if needed."""
