@@ -1358,8 +1358,16 @@ class RuntimeEngine:
                     highs = featured["high"].tolist()
                     lows = featured["low"].tolist()
                     for row_id, row_ts, row_close in past_rows:
-                        # find featured index with matching ts
-                        match = featured.index[featured["ts"].astype(str) == row_ts[:19]]
+                        # Match by normalized timestamp: audit stores ISO-T
+                        # ('2026-09-04T20:00:00+00:00') while pandas astype(str)
+                        # yields space-separated ('2026-09-04 20:00:00+00:00').
+                        # Compare via parsed datetimes, minute precision.
+                        try:
+                            row_dt = pd.to_datetime(row_ts[:19])
+                            f_ts = pd.to_datetime(featured["ts"]).dt.tz_localize(None).dt.floor('min')
+                            match = f_ts[f_ts == row_dt].index
+                        except Exception:
+                            continue
                         if len(match) == 0:
                             continue
                         i = featured.index.get_loc(match[0])
