@@ -113,8 +113,7 @@ class ContextAnalyzer:
             return default
         return val
 
-    @staticmethod
-    def analyze(row: pd.Series, regime_info: Optional[dict] = None) -> MarketContext:
+    def analyze(self, row: pd.Series, regime_info: Optional[dict] = None) -> MarketContext:
         """
         Comprehensive market context analysis.
 

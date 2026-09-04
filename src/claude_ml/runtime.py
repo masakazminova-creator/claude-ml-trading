@@ -740,9 +740,11 @@ class RuntimeEngine:
 
             try:
                 # The context confidence gate must follow the model's score
-                # scale — with thresholds ~0.52 a hardcoded 0.70 base blocks
-                # every entry (see ensemble.ContextAnalyzer anchor).
-                self.ensemble.context_analyzer.model_score_scale = confirm_thresh
+                # scale. 0.80 lands at ~p95 of real model scores with
+                # calibrated thresholds (replayed on 300 recent bars: 29/300
+                # enter signals ≈ top-10% of setups). The old hardcoded 0.70
+                # base was unreachable (max score 53) → zero trades ever.
+                self.ensemble.context_analyzer.model_score_scale = 0.80
                 decision = self.ensemble.evaluate(latest_row, regime=regime_name, stage="full")
             finally:
                 # Restore original thresholds even if evaluate() raises
