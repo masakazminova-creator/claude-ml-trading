@@ -767,6 +767,7 @@ class RuntimeEngine:
                     confidence=decision.confidence,
                     position_size_pct=decision.position_size_pct,
                     reasoning="; ".join(decision.reasoning[:3]) if decision.reasoning else "No signals",
+                    featured=featured,
                 )
             else:
                 # Decision is None - log as SKIP with all scores at 0
@@ -787,6 +788,7 @@ class RuntimeEngine:
                     confidence=0,
                     position_size_pct=0,
                     reasoning="Ensemble returned None - all models below thresholds",
+                    featured=featured,
                 )
 
         # ATR percentile history must sample EVERY bar — previously it only
@@ -1327,6 +1329,7 @@ class RuntimeEngine:
         confidence: float,
         position_size_pct: float,
         reasoning: str,
+        featured: Optional[pd.DataFrame] = None,
     ) -> None:
         """
         Log ALL decisions (ENTER, SKIP, WAIT) to signal_audit table for analysis.
