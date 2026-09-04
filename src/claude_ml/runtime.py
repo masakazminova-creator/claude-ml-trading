@@ -739,6 +739,10 @@ class RuntimeEngine:
             self.ensemble.momentum_model.threshold = momentum_thresh
 
             try:
+                # The context confidence gate must follow the model's score
+                # scale — with thresholds ~0.52 a hardcoded 0.70 base blocks
+                # every entry (see ensemble.ContextAnalyzer anchor).
+                self.ensemble.context_analyzer.model_score_scale = confirm_thresh
                 decision = self.ensemble.evaluate(latest_row, regime=regime_name, stage="full")
             finally:
                 # Restore original thresholds even if evaluate() raises
@@ -746,6 +750,7 @@ class RuntimeEngine:
                 self.ensemble.confirmation_model.threshold_long = old_confirm_l
                 self.ensemble.confirmation_model.threshold_short = old_confirm_s
                 self.ensemble.momentum_model.threshold = old_momentum
+                self.ensemble.context_analyzer.model_score_scale = 0.0
 
             if decision:
                 print(f"[{symbol}] {decision.action.upper()} | Side: {decision.side} | "

@@ -319,8 +319,19 @@ class ContextAnalyzer:
             directional_bias = "neutral"
 
         # === REQUIRED CONFIDENCE ===
-        # Adaptive threshold based on context clarity
-        base_confidence = 0.70
+        # Adaptive threshold based on context clarity, anchored to the
+        # confirmation model's actual score scale (set on this instance by
+        # EnsembleEngine after loading models). The old hardcoded 0.70
+        # (clamped 0.60-0.90) assumed scores in the 0.7-0.9 range; with honest
+        # realized-PnL labels the models top out near 0.5, so this gate alone
+        # blocked every entry. Anchoring keeps the *relative* meaning
+        # (clearer market -> lower bar) while following the model's scale.
+        model_scale = float(getattr(self, "model_score_scale", 0.0) or 0.0)
+        if model_scale > 0:
+            base_confidence = model_scale
+        else:
+            # Fallback: pre-fix behavior
+            base_confidence = 0.70
 
         # Adjust based on clarity (clearer markets need lower confidence)
         if overall_clarity > 0.7:
@@ -347,7 +358,11 @@ class ContextAnalyzer:
             level_adjustment = 0.0
 
         required_confidence = base_confidence + clarity_adjustment + vol_adjustment + level_adjustment
-        required_confidence = max(min(required_confidence, 0.90), 0.60)  # Clamp between 60-90%
+        if model_scale > 0:
+            # Anchor-aware clamp: never above the model's realistic ceiling
+            required_confidence = max(min(required_confidence, model_scale + 0.05), 0.35)
+        else:
+            required_confidence = max(min(required_confidence, 0.90), 0.60)  # Clamp between 60-90%
 
         return MarketContext(
             higher_tf_trend=higher_tf_trend,
@@ -391,6 +406,26 @@ class EnsembleEngine:
         self.confirmation_model = confirmation_model
         self.momentum_model = momentum_model
         self.context_analyzer = ContextAnalyzer()
+        self._update_model_scale()
+
+    def _update_model_scale(self) -> None:
+        """Anchor required_confidence to the confirmation model's real score ceiling.
+
+        The old hardcoded 0.70 base assumed scores of 0.7-0.9; honest labels
+        produce models topping out ~0.5, which made the confidence gate
+        unreachable. Now follows whatever the calibrated threshold engine
+        set — proxy: the confirmation threshold + small margin, bounded.
+        """
+        try:
+            scale = max(
+                self.confirmation_model.threshold_long,
+                self.confirmation_model.threshold_short,
+            )
+            # The models' typical strong-signal ceiling sits a bit above the
+            # calibrated entry threshold; clamp to a sane range.
+            self.context_analyzer.model_score_scale = min(max(scale, 0.40), 0.80)
+        except Exception:
+            self.context_analyzer.model_score_scale = 0.0
 
     def evaluate(
         self,
