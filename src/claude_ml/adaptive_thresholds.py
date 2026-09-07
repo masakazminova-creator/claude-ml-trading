@@ -63,6 +63,11 @@ class AdaptiveThreshold:
     performance_multiplier: float = 1.0
     volatility_multiplier: float = 1.0
 
+    # ContextAnalyzer confidence-gate anchor (p95 of real model scores),
+    # written by continuous_learning._calibrate_thresholds. 0.0 = no anchor
+    # calibrated yet; runtime then falls back to its default.
+    confidence_gate_anchor: float = 0.0
+
     last_updated: str = ""
 
 
@@ -305,6 +310,21 @@ class AdaptiveThresholdEngine:
             chars.avg_profit_factor = (1 - alpha) * chars.avg_profit_factor + alpha * new_pf
             chars.total_trades += 1
 
+    def get_confidence_gate_anchor(self, symbol: str) -> float:
+        """Return the calibrated confidence-gate anchor for a symbol (0.0 if none).
+
+        Lives in the same runtime_state blob the retrain calibration writes,
+        so the gate follows every model promotion automatically.
+        """
+        base = self.base_thresholds.get(symbol)
+        if base:
+            try:
+                self._load_state()
+            except Exception:
+                pass
+            base = self.base_thresholds.get(symbol)
+        return float(base.confidence_gate_anchor) if base else 0.0
+
     def _load_state(self) -> None:
         """Load saved threshold state from database."""
         row = self.conn.execute("""
@@ -320,6 +340,7 @@ class AdaptiveThresholdEngine:
                         thresh.early_signal_threshold = data.get("early_signal_threshold", thresh.early_signal_threshold)
                         thresh.confirmation_threshold = data.get("confirmation_threshold", thresh.confirmation_threshold)
                         thresh.momentum_threshold = data.get("momentum_threshold", thresh.momentum_threshold)
+                        thresh.confidence_gate_anchor = data.get("confidence_gate_anchor", thresh.confidence_gate_anchor)
                         thresh.last_updated = data.get("last_updated", "")
                 print(f"[ADAPTIVE] Loaded saved thresholds: {list(state.keys())}")
             except Exception as e:
@@ -332,6 +353,7 @@ class AdaptiveThresholdEngine:
                 "early_signal_threshold": thresh.early_signal_threshold,
                 "confirmation_threshold": thresh.confirmation_threshold,
                 "momentum_threshold": thresh.momentum_threshold,
+                "confidence_gate_anchor": thresh.confidence_gate_anchor,
                 "last_updated": thresh.last_updated,
             }
             for symbol, thresh in self.base_thresholds.items()

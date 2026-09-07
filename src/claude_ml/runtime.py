@@ -740,11 +740,15 @@ class RuntimeEngine:
 
             try:
                 # The context confidence gate must follow the model's score
-                # scale. 0.80 lands at ~p95 of real model scores with
-                # calibrated thresholds (replayed on 300 recent bars: 29/300
-                # enter signals ≈ top-10% of setups). The old hardcoded 0.70
-                # base was unreachable (max score 53) → zero trades ever.
-                self.ensemble.context_analyzer.model_score_scale = 0.80
+                # scale. Anchor comes from the retrain calibration (p95 of
+                # real confirmation scores on recent bars) so it tracks every
+                # model promotion. Fixed 0.80 was replayed on a crash window;
+                # on normal bars the model ceiling is ~0.42-0.49 → the gate
+                # was unreachable → zero trades.
+                gate_anchor = self.threshold_engine.get_confidence_gate_anchor(symbol)
+                if gate_anchor <= 0:
+                    gate_anchor = 0.55  # Uncalibrated fallback ≈ typical score ceiling
+                self.ensemble.context_analyzer.model_score_scale = gate_anchor
                 decision = self.ensemble.evaluate(latest_row, regime=regime_name, stage="full")
             finally:
                 # Restore original thresholds even if evaluate() raises

@@ -454,6 +454,17 @@ class ContinuousLearningEngine:
         if len(c_vals) >= 50:
             conf_pct = float(np.percentile(c_vals, percentile)) / 100.0
             calibrated["confirmation_threshold"] = round(min(max(conf_pct, 0.50), 0.80), 3)
+            # The ContextAnalyzer confidence gate must live on the same score
+            # scale as the models. Anchor it at the same percentile of real
+            # scores (a fixed 0.80 was replayed on a crash window where scores
+            # spiked; on normal bars the model ceiling is ~0.42-0.49, so the
+            # gate became unreachable again → weeks of skips). Clamped so the
+            # gate always sits above the entry threshold but reachable.
+            gate_pct = float(np.percentile(c_vals, percentile + 5)) / 100.0
+            entry_thresh = calibrated["confirmation_threshold"]
+            calibrated["confidence_gate_anchor"] = round(
+                min(max(gate_pct, entry_thresh + 0.02), 0.65), 3
+            )
 
         # Early signal model: use raw probabilities — predict() filters
         # everything below the current threshold and would return None for
