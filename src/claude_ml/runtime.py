@@ -734,8 +734,9 @@ class RuntimeEngine:
             self.ensemble.early_model.threshold = early_thresh
             self.ensemble.confirmation_model.threshold_long = confirm_thresh
             # Short side previously kept a stale static threshold — adaptive
-            # machinery never affected short entries.
-            self.ensemble.confirmation_model.threshold_short = max(0.5, confirm_thresh - 0.05)
+            # machinery never affected short entries. Floor 0.40 mirrors the
+            # confirmation min-bound: honest-label scores live below 0.5.
+            self.ensemble.confirmation_model.threshold_short = max(0.40, confirm_thresh - 0.05)
             self.ensemble.momentum_model.threshold = momentum_thresh
 
             try:
@@ -747,7 +748,7 @@ class RuntimeEngine:
                 # was unreachable → zero trades.
                 gate_anchor = self.threshold_engine.get_confidence_gate_anchor(symbol)
                 if gate_anchor <= 0:
-                    gate_anchor = 0.55  # Uncalibrated fallback ≈ typical score ceiling
+                    gate_anchor = 0.48  # Uncalibrated fallback ≈ realistic score ceiling
                 self.ensemble.context_analyzer.model_score_scale = gate_anchor
                 decision = self.ensemble.evaluate(latest_row, regime=regime_name, stage="full")
             finally:

@@ -333,10 +333,14 @@ class ContextAnalyzer:
             base_confidence = 0.70
 
         # Adjust based on clarity (clearer markets need lower confidence)
+        # Halved for anchored scales: with honest-label models the whole
+        # score range is 0.35-0.50, so the old +0.10 penalty in chop
+        # (clarity < 0.4, which is the *median* condition) pushed the gate
+        # 20% above anything the model expresses — another silent no-trade.
         if overall_clarity > 0.7:
-            clarity_adjustment = -0.05
+            clarity_adjustment = -0.03
         elif overall_clarity < 0.4:
-            clarity_adjustment = +0.10
+            clarity_adjustment = +0.05
         else:
             clarity_adjustment = 0.0
 
@@ -360,10 +364,10 @@ class ContextAnalyzer:
         if model_scale > 0:
             # Anchor-aware clamp. The anchor itself is calibrated (p95 of real
             # scores, see continuous_learning._calibrate_thresholds), so the
-            # clamp only guards against context adjustments (+0.10 unclear
-            # market, +0.05 vol) pushing the gate above anything the model
-            # can express — which silently re-enables the never-trades bug.
-            required_confidence = max(min(required_confidence, 0.90), 0.35)
+            # clamp only guards against context adjustments pushing the gate
+            # above anything the model can express — which silently
+            # re-enables the never-trades bug.
+            required_confidence = max(min(required_confidence, model_scale + 0.08), model_scale - 0.15)
         else:
             required_confidence = max(min(required_confidence, 0.90), 0.60)  # Clamp between 60-90%
 

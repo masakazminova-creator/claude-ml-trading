@@ -50,11 +50,13 @@ class AdaptiveThreshold:
     confirmation_threshold: float = 0.75
     momentum_threshold: float = 0.55
 
-    # Bounds
-    min_early: float = 0.45
+    # Bounds. Confirmation min 0.40 (was 0.55): honest-label models produce
+    # calibrated probabilities mostly below 0.5, a 0.55 floor sat above the
+    # entire calibrated threshold range and re-blocked every entry.
+    min_early: float = 0.40
     max_early: float = 0.75
-    min_confirmation: float = 0.55
-    max_confirmation: float = 0.90
+    min_confirmation: float = 0.40
+    max_confirmation: float = 0.80
     min_momentum: float = 0.40
     max_momentum: float = 0.70
 

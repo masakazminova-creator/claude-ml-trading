@@ -453,7 +453,10 @@ class ContinuousLearningEngine:
         )
         if len(c_vals) >= 50:
             conf_pct = float(np.percentile(c_vals, percentile)) / 100.0
-            calibrated["confirmation_threshold"] = round(min(max(conf_pct, 0.50), 0.80), 3)
+            # Floor 0.40, not 0.50: honest-label models produce calibrated
+            # probabilities mostly below 0.5 (p50 ≈ 0.38); a 0.50 floor sits
+            # above the entire score distribution → confirm never fires.
+            calibrated["confirmation_threshold"] = round(min(max(conf_pct, 0.40), 0.80), 3)
             # The ContextAnalyzer confidence gate must live on the same score
             # scale as the models. Anchor it at the same percentile of real
             # scores (a fixed 0.80 was replayed on a crash window where scores
